@@ -35,6 +35,7 @@ APP_CFLAGS = $(PLATFORM_DEFS) \
              -ffunction-sections -fdata-sections
 
 SRC_LF = lfops.c lfsampling.c pcf7931.c lfdemod.c lfadc.c
+SRC_HF = hfops.c
 SRC_ISO15693 = iso15693.c iso15693tools.c
 SRC_ISO14443a = iso14443a.c mifareutil.c mifarecmd.c epa.c mifaresim.c
 #UNUSED: mifaresniff.c
@@ -103,7 +104,7 @@ endif
 include Standalone/Makefile.inc
 
 #the FPGA bitstream files. Note: order matters!
-FPGA_BITSTREAMS = fpga_lf.bit fpga_hf.bit fpga_felica.bit
+FPGA_BITSTREAMS = fpga_lf.bit fpga_hf.bit fpga_felica.bit fpga_hf_15.bit
 
 #the lz4 source files required for decompressing the fpga config at run time
 SRC_LZ4 = lz4.c
@@ -132,6 +133,7 @@ THUMBSRC = start.c \
 	$(SRC_EM4x50) \
     $(SRC_EM4x70) \
     $(SRC_SPIFFS) \
+    $(SRC_HF) \
     $(SRC_ISO14443a) \
     $(SRC_ISO14443b) \
     $(SRC_CRAPTO1) \
@@ -184,7 +186,7 @@ showinfo:
 # version_pm3.c should be remade on every time fullimage.stage1.elf should be remade
 version_pm3.c: default_version_pm3.c $(OBJDIR)/fpga_version_info.o $(OBJDIR)/fpga_all.o $(THUMBOBJ) $(ARMOBJ)
 	$(info [-] GEN $@)
-	$(Q)$(SH) ../tools/mkversion.sh > $@ || $(PERL) ../tools/mkversion.pl > $@ || $(CP) $< $@
+	$(Q)$(SH) ../tools/mkversion.sh > $@ || $(CP) $< $@
 
 fpga_version_info.c: $(FPGA_BITSTREAMS) $(FPGA_COMPRESSOR)
 	$(info [-] GEN $@)
@@ -210,14 +212,6 @@ $(OBJDIR)/fullimage.stage1.elf: $(VERSIONOBJ) $(OBJDIR)/fpga_all.o $(THUMBOBJ) $
 	$(info [=] LD $@)
 	$(Q)$(CROSS_LD) $(CROSS_LDFLAGS) -Wl,-T,ldscript,-Map,$(patsubst %.elf,%.map,$@) -o $@ $^ $(LIBS)
 
-$(OBJDIR)/fullimage.nodata.bin: $(OBJDIR)/fullimage.stage1.elf
-	$(info [-] GEN $@)
-	$(Q)$(CROSS_OBJCOPY) -O binary -I elf32-littlearm --remove-section .data $^ $@
-
-$(OBJDIR)/fullimage.nodata.o: $(OBJDIR)/fullimage.nodata.bin
-	$(info [-] GEN $@)
-	$(Q)$(CROSS_OBJCOPY) -O elf32-littlearm -I binary -B arm --rename-section .data=stage1_image $^ $@
-
 $(OBJDIR)/fullimage.data.bin: $(OBJDIR)/fullimage.stage1.elf
 	$(info [-] GEN $@)
 	$(Q)$(CROSS_OBJCOPY) -O binary -I elf32-littlearm --only-section .data $^ $@
@@ -230,14 +224,10 @@ else
 	$(FPGA_COMPRESSOR) $(filter %.bin,$^) $@
 endif
 
-$(OBJDIR)/fullimage.data.o: $(OBJDIR)/fullimage.data.bin.z
-	$(info [-] GEN $@)
-	$(Q)$(CROSS_OBJCOPY) -O elf32-littlearm -I binary -B arm --rename-section .data=compressed_data $^ $@
-
-$(OBJDIR)/fullimage.elf: $(OBJDIR)/fullimage.nodata.o $(OBJDIR)/fullimage.data.o
+$(OBJDIR)/fullimage.elf: $(OBJDIR)/fullimage.stage1.elf $(OBJDIR)/fullimage.data.bin.z
 ifeq (,$(findstring WITH_NO_COMPRESSION,$(APP_CFLAGS)))
 	$(info [=] LD $@)
-	$(Q)$(CROSS_LD) $(CROSS_LDFLAGS) -Wl,-T,ldscript,-e,_osimage_entry,-Map,$(patsubst %.elf,%.map,$@) -o $@ $^
+	$(Q)$(CROSS_OBJCOPY) -O elf32-littlearm -I elf32-littlearm --strip-all --update-section .data=$(OBJDIR)/fullimage.data.bin.z $(OBJDIR)/fullimage.stage1.elf $@
 else
 	$(Q)$(CP) $(OBJDIR)/fullimage.stage1.elf $@
 endif
@@ -259,12 +249,12 @@ clean:
 
 install: all
 	$(info [@] Installing fullimage to $(DESTDIR)$(PREFIX)...)
-	$(Q)$(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)
-	$(Q)$(CP) $(INSTALLFW) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)$(PATHSEP)$(INSTALLFWTAG)
+	$(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)
+	$(Q)$(INSTALLSUDO) $(CP) $(INSTALLFW) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)$(PATHSEP)$(INSTALLFWTAG)
 
 uninstall:
 	$(info [@] Uninstalling fullimage from $(DESTDIR)$(PREFIX)...)
-	$(Q)$(RM) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)$(PATHSEP)$(INSTALLFWTAG)
+	$(Q)$(INSTALLSUDO) $(RM) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)$(PATHSEP)$(INSTALLFWTAG)
 
 .PHONY: all clean help install uninstall
 help:

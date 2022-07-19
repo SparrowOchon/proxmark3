@@ -33,6 +33,7 @@
 #include "legicrf.h"
 #include "BigBuf.h"
 #include "iclass_cmd.h"
+#include "hfops.h"
 #include "iso14443a.h"
 #include "iso14443b.h"
 #include "iso15693.h"
@@ -121,7 +122,7 @@ void send_wtx(uint16_t wtx) {
 // in ADC units (0 to 1023). Also a routine to sum up a number of samples and
 // return that.
 //-----------------------------------------------------------------------------
-static uint16_t ReadAdc(int ch) {
+static uint16_t ReadAdc(uint8_t ch) {
 
     // Note: ADC_MODE_PRESCALE and ADC_MODE_SAMPLE_HOLD_TIME are set to the maximum allowed value.
     // AMPL_HI is are high impedance (10MOhm || 1MOhm) output, the input capacitance of the ADC is 12pF (typical). This results in a time constant
@@ -147,11 +148,11 @@ static uint16_t ReadAdc(int ch) {
 }
 
 // was static - merlok
-uint16_t AvgAdc(int ch) {
+uint16_t AvgAdc(uint8_t ch) {
     return SumAdc(ch, 32) >> 5;
 }
 
-uint16_t SumAdc(int ch, int NbSamples) {
+uint16_t SumAdc(uint8_t ch, uint8_t NbSamples) {
     uint16_t a = 0;
     for (uint8_t i = 0; i < NbSamples; i++)
         a += ReadAdc(ch);
@@ -286,6 +287,7 @@ static void SendVersion(void) {
         strncat(VersionString, temp, sizeof(VersionString) - strlen(VersionString) - 1);
         strncat(VersionString, "\n", sizeof(VersionString) - strlen(VersionString) - 1);
     }
+
 
     FormatVersionInformation(temp, sizeof(temp), "       os: ", &g_version_information);
     strncat(VersionString, temp, sizeof(VersionString) - strlen(VersionString) - 1);
@@ -781,6 +783,10 @@ static void PacketReceived(PacketCommandNG *packet) {
             reply_ng(CMD_SET_DBGMODE, PM3_SUCCESS, NULL, 0);
             break;
         }
+        case CMD_GET_DBGMODE: {
+            reply_ng(CMD_GET_DBGMODE, PM3_SUCCESS, (uint8_t *)&g_dbglevel, 1);
+            break;
+        }
         case CMD_SET_TEAROFF: {
             struct p {
                 uint16_t delay_us;
@@ -859,6 +865,7 @@ static void PacketReceived(PacketCommandNG *packet) {
                 bool     verbose : 1;
             } PACKED;
             struct p *payload = (struct p *)packet->data.asBytes;
+
             uint32_t bits = SniffLF(payload->verbose, payload->samples, true);
             reply_ng(CMD_LF_SNIFF_RAW_ADC, PM3_SUCCESS, (uint8_t *)&bits, sizeof(bits));
             break;
@@ -912,16 +919,18 @@ static void PacketReceived(PacketCommandNG *packet) {
             reply_ng(CMD_LF_EM410X_WATCH, res, NULL, 0);
             break;
         }
-        case CMD_LF_EM410X_WRITE: {
+        case CMD_LF_EM410X_CLONE: {
             struct p {
-                uint8_t card;
+                bool Q5;
+                bool EM;
                 uint8_t clock;
                 uint32_t high;
                 uint32_t low;
             } PACKED;
             struct p *payload = (struct p *)packet->data.asBytes;
-            int res = copy_em410x_to_t55xx(payload->card, payload->clock, payload->high, payload->low, true);
-            reply_ng(CMD_LF_EM410X_WRITE, res, NULL, 0);
+            uint8_t card = payload->Q5 ? 0 : (payload->EM ? 2 : 1);
+            int res = copy_em410x_to_t55xx(card, payload->clock, payload->high, payload->low, true);
+            reply_ng(CMD_LF_EM410X_CLONE, res, NULL, 0);
             break;
         }
         case CMD_LF_TI_READ: {
@@ -1231,7 +1240,7 @@ static void PacketReceived(PacketCommandNG *packet) {
             break;
         }
         case CMD_HF_ISO15693_SNIFF: {
-            SniffIso15693(0, NULL);
+            SniffIso15693(0, NULL, false);
             reply_ng(CMD_HF_ISO15693_SNIFF, PM3_SUCCESS, NULL, 0);
             break;
         }
@@ -1244,7 +1253,7 @@ static void PacketReceived(PacketCommandNG *packet) {
             break;
         }
         case CMD_HF_ISO15693_READER: {
-            ReaderIso15693(packet->oldarg[0], NULL);
+            ReaderIso15693(NULL);
             break;
         }
         case CMD_HF_ISO15693_SIMULATE: {
@@ -1271,6 +1280,14 @@ static void PacketReceived(PacketCommandNG *packet) {
             DisablePrivacySlixLIso15693(payload->pwd);
             break;
         }
+        case CMD_HF_ISO15693_SLIX_L_DISABLE_AESAFI: {
+            struct p {
+                uint8_t pwd[4];
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            DisableEAS_AFISlixLIso15693(payload->pwd);
+            break;
+        }
 
 #endif
 
@@ -1285,11 +1302,13 @@ static void PacketReceived(PacketCommandNG *packet) {
             break;
         }
         case CMD_HF_LEGIC_WRITER: {
-            LegicRfWriter(packet->oldarg[0], packet->oldarg[1], packet->oldarg[2], packet->data.asBytes);
+            legic_packet_t *payload = (legic_packet_t *) packet->data.asBytes;
+            LegicRfWriter(payload->offset, payload->len, payload->iv, payload->data);
             break;
         }
         case CMD_HF_LEGIC_READER: {
-            LegicRfReader(packet->oldarg[0], packet->oldarg[1], packet->oldarg[2]);
+            legic_packet_t *payload = (legic_packet_t *) packet->data.asBytes;
+            LegicRfReader(payload->offset, payload->len, payload->iv);
             break;
         }
         case CMD_HF_LEGIC_INFO: {
@@ -1302,10 +1321,9 @@ static void PacketReceived(PacketCommandNG *packet) {
             // involved in dealing with emulator memory. But if it is called later, it might
             // destroy the Emulator Memory.
             //-----------------------------------------------------------------------------
-            // arg0 = offset
-            // arg1 = num of bytes
             FpgaDownloadAndGo(FPGA_BITSTREAM_HF);
-            emlSet(packet->data.asBytes, packet->oldarg[0], packet->oldarg[1]);
+            legic_packet_t *payload = (legic_packet_t *) packet->data.asBytes;
+            emlSet(payload->data, payload->offset, payload->len);
             break;
         }
 #endif
@@ -1365,6 +1383,26 @@ static void PacketReceived(PacketCommandNG *packet) {
             felica_dump_lite_s();
             break;
         }
+#endif
+
+#ifdef WITH_GENERAL_HF
+        case CMD_HF_ACQ_RAW_ADC: {
+            uint32_t samplesCount = 0;
+            memcpy(&samplesCount, packet->data.asBytes, 4);
+            HfReadADC(samplesCount, true);
+            break;
+        }
+        case CMD_HF_TEXKOM_SIMULATE: {
+            struct p {
+                uint8_t data[8];
+                uint8_t modulation;
+                uint32_t timeout;
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            HfSimulateTkm(payload->data, payload->modulation, payload->timeout);
+            break;
+        }
+
 #endif
 
 #ifdef WITH_ISO14443a
@@ -1456,6 +1494,10 @@ static void PacketReceived(PacketCommandNG *packet) {
         }
         case CMD_HF_MIFARE_WRITEBL: {
             MifareWriteBlock(packet->oldarg[0], packet->oldarg[1], packet->data.asBytes);
+            break;
+        }
+        case CMD_HF_MIFARE_VALUE: {
+            MifareValue(packet->oldarg[0], packet->oldarg[1], packet->data.asBytes);
             break;
         }
         case CMD_HF_MIFAREU_WRITEBL: {
@@ -1700,8 +1742,12 @@ static void PacketReceived(PacketCommandNG *packet) {
             break;
         }
         case CMD_HF_ICLASS_EML_MEMSET: {
-            //iceman, should call FPGADOWNLOAD before, since it corrupts BigBuf
-            FpgaDownloadAndGo(FPGA_BITSTREAM_HF);
+            //-----------------------------------------------------------------------------
+            // Note: we call FpgaDownloadAndGo(FPGA_BITSTREAM_HF_15) here although FPGA is not
+            // involved in dealing with emulator memory. But if it is called later, it might
+            // destroy the Emulator Memory.
+            //-----------------------------------------------------------------------------
+            FpgaDownloadAndGo(FPGA_BITSTREAM_HF_15);
             struct p {
                 uint16_t offset;
                 uint16_t len;
@@ -1738,11 +1784,13 @@ static void PacketReceived(PacketCommandNG *packet) {
             struct p {
                 uint32_t samplesToSkip;
                 uint32_t triggersToSkip;
+                uint8_t skipMode;
+                uint8_t skipRatio;
             } PACKED;
             struct p *payload = (struct p *)packet->data.asBytes;
 
             uint16_t len = 0;
-            int res = HfSniff(payload->samplesToSkip, payload->triggersToSkip, &len);
+            int res = HfSniff(payload->samplesToSkip, payload->triggersToSkip, &len, payload->skipMode, payload->skipRatio);
 
             struct {
                 uint16_t len;
@@ -2461,7 +2509,7 @@ void  __attribute__((noreturn)) AppMain(void) {
     SpinDelay(100);
     BigBuf_initialize();
 
-    for (uint32_t *p = _stack_start; p < _stack_end - 0x200; ++p) {
+    for (uint32_t *p = _stack_start; p + 0x200 < _stack_end ; ++p) {
         *p = 0xdeadbeef;
     }
 

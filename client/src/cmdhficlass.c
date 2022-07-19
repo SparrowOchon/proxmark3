@@ -37,7 +37,10 @@
 #include "cmdsmartcard.h"   // smart select fct
 #include "proxendian.h"
 #include "iclass_cmd.h"
+#include "crypto/asn1utils.h"      // ASN1 decoder
 
+
+#define PICOPASS_BLOCK_SIZE    8
 #define NUM_CSNS               9
 #define ICLASS_KEYS_MAX        8
 #define ICLASS_AUTH_RETRY      10
@@ -55,6 +58,7 @@ static uint8_t empty[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static uint8_t zeros[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 static int CmdHelp(const char *Cmd);
+static void printIclassSIO(uint8_t *iclass_dump);
 
 static uint8_t iClass_Key_Table[ICLASS_KEYS_MAX][8] = {
     { 0xAE, 0xA6, 0x84, 0xA6, 0xDA, 0xB2, 0x32, 0x78 },
@@ -1000,38 +1004,12 @@ static int CmdHFiClassELoad(const char *Cmd) {
 
     CLIParserFree(ctx);
 
-    size_t bytes_read = 2048;
+    // read dump file
     uint8_t *dump = NULL;
-    int res = 0;
-    DumpFileType_t dftype = getfiletype(filename);
-    switch (dftype) {
-        case BIN: {
-            res = loadFile_safe(filename, ".bin", (void **)&dump, &bytes_read);
-            break;
-        }
-        case EML: {
-            res = loadFileEML_safe(filename, (void **)&dump, &bytes_read);
-            break;
-        }
-        case JSON: {
-            dump = calloc(2048, sizeof(uint8_t));
-            if (dump == NULL) {
-                PrintAndLogEx(ERR, "error, cannot allocate memory ");
-                return PM3_EMALLOC;
-            }
-            res = loadFileJSON(filename, (void *)dump, 2048, &bytes_read, NULL);
-            break;
-        }
-        case DICTIONARY: {
-            free(dump);
-            PrintAndLogEx(ERR, "Error: Only BIN/JSON/EML formats allowed");
-            return PM3_EINVARG;
-        }
-    }
-
+    size_t bytes_read = 2048;
+    int res = pm3_load_dump(filename, (void **)&dump, &bytes_read, 2048);
     if (res != PM3_SUCCESS) {
-        free(dump);
-        return PM3_EFILE;
+        return res;
     }
 
     uint8_t *newdump = realloc(dump, bytes_read);
@@ -1102,9 +1080,7 @@ static int CmdHFiClassESave(const char *Cmd) {
         FillFileNameByUID(fptr, dump, "-dump", 8);
     }
 
-    saveFile(filename, ".bin", dump, bytes);
-    saveFileEML(filename, dump, bytes, 8);
-    saveFileJSON(filename, jsfIclass, dump, bytes, NULL);
+    pm3_save_dump(filename, dump, bytes, jsfIclass, PICOPASS_BLOCK_SIZE);
     free(dump);
 
     PrintAndLogEx(HINT, "Try `" _YELLOW_("hf iclass view -f") "` to view dump file");
@@ -1166,6 +1142,11 @@ static int CmdHFiClassEView(const char *Cmd) {
 
     PrintAndLogEx(NORMAL, "");
     printIclassDumpContents(dump, 1, blocks, bytes);
+
+    if (verbose) {
+        printIclassSIO(dump);
+    }
+
     free(dump);
     return PM3_SUCCESS;
 }
@@ -1243,35 +1224,10 @@ static int CmdHFiClassDecrypt(const char *Cmd) {
     // if user supplied dump file,  time to load it
     if (fnlen > 0) {
 
-        DumpFileType_t dftype = getfiletype(filename);
-        switch (dftype) {
-            case BIN: {
-                res = loadFile_safe(filename, ".bin", (void **)&decrypted, &decryptedlen);
-                break;
-            }
-            case EML: {
-                res = loadFileEML_safe(filename, (void **)&decrypted, &decryptedlen);
-                break;
-            }
-            case JSON: {
-                decrypted =  calloc(2048, sizeof(uint8_t));
-                if (decrypted == NULL) {
-                    PrintAndLogEx(ERR, "error, cannot allocate memory ");
-                    return PM3_EMALLOC;
-                }
-                res = loadFileJSON(filename, (void *)decrypted, 2048, &decryptedlen, NULL);
-                break;
-            }
-            case DICTIONARY: {
-                free(decrypted);
-                PrintAndLogEx(ERR, "Error: Only BIN/JSON/EML formats allowed");
-                return PM3_EINVARG;
-            }
-        }
-
+        // read dump file
+        res = pm3_load_dump(filename, (void **)&decrypted, &decryptedlen, 2048);
         if (res != PM3_SUCCESS) {
-            free(decrypted);
-            return PM3_EFILE;
+            return res;
         }
 
         have_file = true;
@@ -1338,7 +1294,7 @@ static int CmdHFiClassDecrypt(const char *Cmd) {
 
         BLOCK79ENCRYPTION aa1_encryption = (decrypted[(6 * 8) + 7] & 0x03);
 
-        uint32_t limit = MIN(applimit, decryptedlen / 8);
+        uint8_t limit = MIN(applimit, decryptedlen / 8);
 
         if (decryptedlen / 8 != applimit) {
             PrintAndLogEx(WARNING, "Actual file len " _YELLOW_("%zu") " vs HID app-limit len " _YELLOW_("%u"), decryptedlen, applimit * 8);
@@ -1347,9 +1303,9 @@ static int CmdHFiClassDecrypt(const char *Cmd) {
 
         //uint8_t numblocks4userid = GetNumberBlocksForUserId(decrypted + (6 * 8));
 
-        for (uint16_t blocknum = 0; blocknum < limit; ++blocknum) {
+        for (uint8_t blocknum = 0; blocknum < limit; ++blocknum) {
 
-            uint8_t idx = blocknum * 8;
+            uint16_t idx = blocknum * 8;
             memcpy(enc_data, decrypted + idx, 8);
 
             if (aa1_encryption == RFU || aa1_encryption == None)
@@ -1376,11 +1332,13 @@ static int CmdHFiClassDecrypt(const char *Cmd) {
         strcat(fptr, "hf-iclass-");
         FillFileNameByUID(fptr, hdr->csn, "-dump-decrypted", sizeof(hdr->csn));
 
-        saveFile(fptr, ".bin", decrypted, decryptedlen);
-        saveFileEML(fptr, decrypted, decryptedlen, 8);
-        saveFileJSON(fptr, jsfIclass, decrypted, decryptedlen, NULL);
+        pm3_save_dump(fptr, decrypted, decryptedlen, jsfIclass, PICOPASS_BLOCK_SIZE);
 
         printIclassDumpContents(decrypted, 1, (decryptedlen / 8), decryptedlen);
+
+        if (verbose) {
+            printIclassSIO(decrypted);
+        }
 
         PrintAndLogEx(NORMAL, "");
 
@@ -1397,26 +1355,24 @@ static int CmdHFiClassDecrypt(const char *Cmd) {
         if (has_values) {
 
             //todo:  remove preamble/sentinel
-            uint32_t top = 0, mid, bot;
-            mid = bytes_to_num(decrypted + (8 * 7), 4);
-            bot = bytes_to_num(decrypted + (8 * 7) + 4, 4);
+            uint32_t top = 0, mid = 0, bot = 0;
 
             PrintAndLogEx(INFO, "Block 7 decoder");
 
             char hexstr[16 + 1] = {0};
             hex_to_buffer((uint8_t *)hexstr, decrypted + (8 * 7), 8, sizeof(hexstr) - 1, 0, 0, true);
+            hexstring_to_u96(&top, &mid, &bot, hexstr);
 
-            char binstr[8 * 8 + 1] = {0};
+            char binstr[64 + 1];
             hextobinstring(binstr, hexstr);
-            uint8_t i = 0;
-            while (i < strlen(binstr) && binstr[i++] == '0');
+            char *pbin = binstr;
+            while (strlen(pbin) && *(++pbin) == '0');
 
-            PrintAndLogEx(SUCCESS, "Binary..................... " _GREEN_("%s"), binstr + i);
+            PrintAndLogEx(SUCCESS, "Binary..................... " _GREEN_("%s"), pbin);
 
             PrintAndLogEx(INFO, "Wiegand decode");
-            wiegand_message_t packed = initialize_message_object(top, mid, bot, strlen(binstr + i));
+            wiegand_message_t packed = initialize_message_object(top, mid, bot, 0);
             HIDTryUnpack(&packed);
-
         } else {
             PrintAndLogEx(INFO, "No credential found");
         }
@@ -1788,7 +1744,7 @@ static int CmdHFiClassDump(const char *Cmd) {
         payload.start_block = 3;
         payload.req.do_auth = false;
     } else {
-        payload.start_block = 6;
+        payload.start_block = 5;
     }
 
     clearCommandBuffer();
@@ -1930,9 +1886,8 @@ write_dump:
 
     // save the dump to .bin file
     PrintAndLogEx(SUCCESS, "saving dump file - %u blocks read", bytes_got / 8);
-    saveFile(filename, ".bin", tag_data, bytes_got);
-    saveFileEML(filename, tag_data, bytes_got, 8);
-    saveFileJSON(filename, jsfIclass, tag_data, bytes_got, NULL);
+
+    pm3_save_dump(filename, tag_data, bytes_got, jsfIclass, PICOPASS_BLOCK_SIZE);
 
     PrintAndLogEx(HINT, "Try `" _YELLOW_("hf iclass decrypt -f") "` to decrypt dump file");
     PrintAndLogEx(HINT, "Try `" _YELLOW_("hf iclass view -f") "` to view dump file");
@@ -2157,38 +2112,12 @@ static int CmdHFiClassRestore(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    size_t bytes_read = 2048;
+    // read dump file
     uint8_t *dump = NULL;
-    int res = PM3_SUCCESS;
-    DumpFileType_t dftype = getfiletype(filename);
-    switch (dftype) {
-        case BIN: {
-            res = loadFile_safe(filename, ".bin", (void **)&dump, &bytes_read);
-            break;
-        }
-        case EML: {
-            res = loadFileEML_safe(filename, (void **)&dump, &bytes_read);
-            break;
-        }
-        case JSON: {
-            dump =  calloc(2048, sizeof(uint8_t));
-            if (dump == NULL) {
-                PrintAndLogEx(ERR, "error, cannot allocate memory ");
-                return PM3_EMALLOC;
-            }
-            res = loadFileJSON(filename, (void *)dump, 2048, &bytes_read, NULL);
-            break;
-        }
-        case DICTIONARY: {
-            free(dump);
-            PrintAndLogEx(ERR, "Error: Only BIN/JSON/EML formats allowed");
-            return PM3_EINVARG;
-        }
-    }
-
+    size_t bytes_read = 2048;
+    int res = pm3_load_dump(filename, (void **)&dump, &bytes_read, 2048);
     if (res != PM3_SUCCESS) {
-        free(dump);
-        return PM3_EFILE;
+        return res;
     }
 
     if (bytes_read == 0) {
@@ -2440,23 +2369,21 @@ static int CmdHFiClass_ReadBlock(const char *Cmd) {
             if (memcmp(dec_data, empty, 8) != 0) {
 
                 //todo:  remove preamble/sentinel
-
-                uint32_t top = 0, mid, bot;
-                mid = bytes_to_num(dec_data, 4);
-                bot = bytes_to_num(dec_data + 4, 4);
+                uint32_t top = 0, mid = 0, bot = 0;
 
                 char hexstr[16 + 1] = {0};
                 hex_to_buffer((uint8_t *)hexstr, dec_data, 8, sizeof(hexstr) - 1, 0, 0, true);
-                char binstr[64 + 1] = {0};
-                hextobinstring(binstr, hexstr);
-                uint8_t i = 0;
-                while (i < strlen(binstr) && binstr[i++] == '0');
+                hexstring_to_u96(&top, &mid, &bot, hexstr);
 
-                i &= 0x3C;
-                PrintAndLogEx(SUCCESS, "      bin : %s", binstr + i);
+                char binstr[64 + 1];
+                hextobinstring(binstr, hexstr);
+                char *pbin = binstr;
+                while (strlen(pbin) && *(++pbin) == '0');
+
+                PrintAndLogEx(SUCCESS, "      bin : %s", pbin);
                 PrintAndLogEx(INFO, "");
                 PrintAndLogEx(INFO, "------------------------------ " _CYAN_("wiegand") " -------------------------------");
-                wiegand_message_t packed = initialize_message_object(top, mid, bot, strlen(binstr + i));
+                wiegand_message_t packed = initialize_message_object(top, mid, bot, 0);
                 HIDTryUnpack(&packed);
             } else {
                 PrintAndLogEx(INFO, "no credential found");
@@ -2515,6 +2442,58 @@ static int CmdHFiClass_loclass(const char *Cmd) {
     return bruteforceFileNoKeys(filename);
 }
 
+static void detect_credential(uint8_t *data, bool *legacy, bool *se, bool *sr) {
+    char* r1 = strstr((char*)data + (5 * 8), "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF");
+    char* r2 = strstr((char*)data + (11 * 8), "\x05\x00\x05\x00");
+
+    *legacy = (r1) && (data[6 * 8] != 0x30);
+    *se = (r2) && (data[6 * 8] == 0x30);
+    *sr = (r2) && (data[10 * 8] == 0x30);
+    r1 = NULL, r2 = NULL;
+}
+
+// print ASN1 decoded array in TLV view
+static void printIclassSIO(uint8_t *iclass_dump) {
+
+    bool isLegacy, isSE, isSR;
+    detect_credential(iclass_dump, &isLegacy, &isSE, &isSR);
+
+    uint8_t pattern[] = {0x05, 0x00, 0x05, 0x00};
+    if (isSE) {
+
+        int dlen = byte_strstr(iclass_dump + (6 * 8), 8*8, pattern, sizeof(pattern));
+        if (dlen) {
+
+            dlen += sizeof(pattern);
+
+            PrintAndLogEx(NORMAL, "");
+            PrintAndLogEx(INFO, "---------------------------- " _CYAN_("SIO - RAW") " ----------------------------");
+            print_hex_noascii_break(iclass_dump + (6*8), dlen, 32);
+            PrintAndLogEx(NORMAL, "");
+            PrintAndLogEx(INFO, "------------------------- " _CYAN_("SIO - ASN1 TLV") " --------------------------");
+            asn1_print(iclass_dump + (6 * 8), dlen, "  ");
+            PrintAndLogEx(NORMAL, "");
+        }
+    }
+
+    if (isSR) {
+
+        int dlen = byte_strstr(iclass_dump + (10 * 8), 8*8, pattern, sizeof(pattern));
+
+        if (dlen) {
+            dlen += sizeof(pattern);
+
+            PrintAndLogEx(NORMAL, "");
+            PrintAndLogEx(INFO, "---------------------------- " _CYAN_("SIO - RAW") " ----------------------------");
+            print_hex_noascii_break(iclass_dump + (10*8), dlen, 32);
+            PrintAndLogEx(NORMAL, "");
+            PrintAndLogEx(INFO, "------------------------- " _CYAN_("SIO - ASN1 TLV") " --------------------------");
+            asn1_print(iclass_dump + (10 * 8), dlen, "  ");
+            PrintAndLogEx(NORMAL, "");
+        }
+    }
+}
+
 void printIclassDumpContents(uint8_t *iclass_dump, uint8_t startblock, uint8_t endblock, size_t filesize) {
 
     picopass_hdr_t *hdr = (picopass_hdr_t *)iclass_dump;
@@ -2556,13 +2535,16 @@ void printIclassDumpContents(uint8_t *iclass_dump, uint8_t startblock, uint8_t e
     );
     */
     uint8_t pagemap = get_pagemap(hdr);
-    int i = startblock;
 
+    bool isLegacy, isSE, isSR;
+    detect_credential(iclass_dump, &isLegacy, &isSE, &isSR);
+
+    int i = startblock;
     PrintAndLogEx(NORMAL, "");
-    PrintAndLogEx(INFO, "-------------------------- " _CYAN_("Tag memory") " ---------------------------");
+    PrintAndLogEx(INFO, "--------------------------- " _CYAN_("Tag memory") " ----------------------------");
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, " block#  | data                    | ascii    |lck| info");
-    PrintAndLogEx(INFO, "---------+-------------------------+----------+---+--------------");
+    PrintAndLogEx(INFO, "---------+-------------------------+----------+---+----------------");
     PrintAndLogEx(INFO, "  0/0x00 | " _GREEN_("%s") "| " _GREEN_("%s") " |   | CSN "
                   , sprint_hex(iclass_dump, 8)
                   , sprint_ascii(iclass_dump, 8)
@@ -2629,26 +2611,54 @@ void printIclassDumpContents(uint8_t *iclass_dump, uint8_t startblock, uint8_t e
 
         } else {
             const char *info_ks[] = {"CSN", "Config", "E-purse", "Debit", "Credit", "AIA", "User"};
-            const char *s = info_ks[6];
-            if (i < 6) {
-                s = info_ks[i];
-            }
-            if (i >= 6 && i <= 9) {
-                PrintAndLogEx(INFO, "%3d/0x%02X | " _YELLOW_("%s") "| " _YELLOW_("%s") " | %s | %s "
+
+            if (i >= 6 && i <= 9 && isLegacy && isSE == false) {
+                // legacy credential
+                PrintAndLogEx(INFO, "%3d/0x%02X | " _YELLOW_("%s") "| " _YELLOW_("%s") " | %s | User / Cred "
                               , i
                               , i
                               , sprint_hex(blk, 8)
                               , sprint_ascii(blk, 8)
                               , lockstr
-                              , s
+                             );
+            } else if (i >= 6 && i <= 12 && isSE) {
+                // SIO credential
+                PrintAndLogEx(INFO, "%3d/0x%02X | " _CYAN_("%s") "| " _CYAN_("%s") " | %s | User / SIO / SE"
+                              , i
+                              , i
+                              , sprint_hex(blk, 8)
+                              , sprint_ascii(blk, 8)
+                              , lockstr
+                             );
+            } else if (i >= 10 && i <= 16 && isSR) {
+                // SIO credential
+                PrintAndLogEx(INFO, "%3d/0x%02X | " _CYAN_("%s") "| " _CYAN_("%s") " | %s | User / SIO / SR"
+                              , i
+                              , i
+                              , sprint_hex(blk, 8)
+                              , sprint_ascii(blk, 8)
+                              , lockstr
                              );
             } else {
+                const char *s = info_ks[6];
+                if (i < 6) {
+                    s = info_ks[i];
+                }
                 PrintAndLogEx(INFO, "%3d/0x%02X | %s | %s | %s ", i, i, sprint_hex_ascii(blk, 8), lockstr, s);
             }
         }
         i++;
     }
-    PrintAndLogEx(INFO, "---------+-------------------------+----------+---+--------------");
+    PrintAndLogEx(INFO, "---------+-------------------------+----------+---+----------------");
+    if (isLegacy)
+        PrintAndLogEx(HINT, _YELLOW_("yellow") " = legacy credential");
+
+    if (isSE)
+        PrintAndLogEx(HINT, _CYAN_("cyan") " = SIO / SE credential");
+
+    if (isSR)
+        PrintAndLogEx(HINT, _CYAN_("cyan") " = SIO / SR credential");
+
     PrintAndLogEx(NORMAL, "");
 }
 
@@ -2679,38 +2689,12 @@ static int CmdHFiClassView(const char *Cmd) {
 
     CLIParserFree(ctx);
 
-    size_t bytes_read = 2048;
+    // read dump file
     uint8_t *dump = NULL;
-    int res = 0;
-    DumpFileType_t dftype = getfiletype(filename);
-    switch (dftype) {
-        case BIN: {
-            res = loadFile_safe(filename, ".bin", (void **)&dump, &bytes_read);
-            break;
-        }
-        case EML: {
-            res = loadFileEML_safe(filename, (void **)&dump, &bytes_read);
-            break;
-        }
-        case JSON: {
-            dump = calloc(2048, sizeof(uint8_t));
-            if (dump == NULL) {
-                PrintAndLogEx(ERR, "error, cannot allocate memory ");
-                return PM3_EMALLOC;
-            }
-            res = loadFileJSON(filename, (void *)dump, 2048, &bytes_read, NULL);
-            break;
-        }
-        case DICTIONARY: {
-            free(dump);
-            PrintAndLogEx(ERR, "Error: Only BIN/JSON/EML formats allowed");
-            return PM3_EINVARG;
-        }
-    }
-
+    size_t bytes_read = 2048;
+    int res = pm3_load_dump(filename, (void **)&dump, &bytes_read, 2048);
     if (res != PM3_SUCCESS) {
-        free(dump);
-        return PM3_EFILE;
+        return res;
     }
 
     if (verbose) {
@@ -2723,6 +2707,11 @@ static int CmdHFiClassView(const char *Cmd) {
     print_picopass_header((picopass_hdr_t *) dump);
     print_picopass_info((picopass_hdr_t *) dump);
     printIclassDumpContents(dump, startblock, endblock, bytes_read);
+
+    if (verbose) {
+        printIclassSIO(dump);
+    }
+
     free(dump);
     return PM3_SUCCESS;
 }
@@ -2907,12 +2896,12 @@ static int loadKeys(char *filename) {
         free(dump);
         return PM3_EFILE;
     }
-    uint8_t i = 0;
+    size_t i = 0;
     for (; i < bytes_read / 8; i++)
         memcpy(iClass_Key_Table[i], dump + (i * 8), 8);
 
     free(dump);
-    PrintAndLogEx(SUCCESS, "Loaded " _GREEN_("%2d") " keys from %s", i, filename);
+    PrintAndLogEx(SUCCESS, "Loaded " _GREEN_("%2zd") " keys from %s", i, filename);
     return PM3_SUCCESS;
 }
 
@@ -3456,7 +3445,7 @@ void GenerateMacFrom(uint8_t *CSN, uint8_t *CCNR, bool use_raw, bool use_elite, 
     pthread_t threads[iclass_tc];
     iclass_thread_arg_t args[iclass_tc];
     // init thread arguments
-    for (uint8_t i = 0; i < iclass_tc; i++) {
+    for (size_t i = 0; i < iclass_tc; i++) {
         args[i].thread_idx = i;
         args[i].use_raw = use_raw;
         args[i].use_elite = use_elite;
@@ -3522,7 +3511,7 @@ void GenerateMacKeyFrom(uint8_t *CSN, uint8_t *CCNR, bool use_raw, bool use_elit
     pthread_t threads[iclass_tc];
     iclass_thread_arg_t args[iclass_tc];
     // init thread arguments
-    for (uint8_t i = 0; i < iclass_tc; i++) {
+    for (size_t i = 0; i < iclass_tc; i++) {
         args[i].thread_idx = i;
         args[i].use_raw = use_raw;
         args[i].use_elite = use_elite;
@@ -3534,7 +3523,7 @@ void GenerateMacKeyFrom(uint8_t *CSN, uint8_t *CCNR, bool use_raw, bool use_elit
         memcpy(args[i].cc_nr, CCNR, sizeof(args[i].cc_nr));
     }
 
-    for (int i = 0; i < iclass_tc; i++) {
+    for (size_t i = 0; i < iclass_tc; i++) {
         int res = pthread_create(&threads[i], NULL, bf_generate_mackey, (void *)&args[i]);
         if (res) {
             PrintAndLogEx(NORMAL, "");
@@ -3985,7 +3974,7 @@ static command_t CommandTable[] = {
     {"info",        CmdHFiClassInfo,            AlwaysAvailable, "Tag information"},
     {"list",        CmdHFiClassList,            AlwaysAvailable, "List iclass history"},
     {"rdbl",        CmdHFiClass_ReadBlock,      IfPm3Iclass,     "Read Picopass / iCLASS block"},
-    {"reader",      CmdHFiClassReader,          IfPm3Iclass,     "Act like an Picopass / iCLASS reader"},
+    {"reader",      CmdHFiClassReader,          IfPm3Iclass,     "Act like a Picopass / iCLASS reader"},
     {"restore",     CmdHFiClassRestore,        IfPm3Iclass,      "Restore a dump file onto a Picopass / iCLASS tag"},
     {"sniff",       CmdHFiClassSniff,           IfPm3Iclass,     "Eavesdrop Picopass / iCLASS communication"},
     {"wrbl",        CmdHFiClass_WriteBlock,     IfPm3Iclass,     "Write Picopass / iCLASS block"},

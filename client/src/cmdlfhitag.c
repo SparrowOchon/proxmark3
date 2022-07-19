@@ -156,11 +156,12 @@ static int CmdLFHitagList(const char *Cmd) {
         int j;
         for (j = 0; j < len; j++) {
 
+            int offset = j * 4;
             //if((parityBits >> (len - j - 1)) & 0x01) {
             if (isResponse && (oddparity8(frame[j]) != ((parityBits >> (len - j - 1)) & 0x01))) {
-                sprintf(line + (j * 4), "%02x!  ", frame[j]);
+                snprintf(line + offset, sizeof(line) - offset, "%02x!  ", frame[j]);
             } else {
-                sprintf(line + (j * 4), "%02x   ", frame[j]);
+                snprintf(line + offset, sizeof(line) - offset, "%02x   ", frame[j]);
             }
         }
 
@@ -248,45 +249,18 @@ static int CmdLFHitagEload(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    DumpFileType_t dftype = getfiletype(filename);
-    size_t dumplen = 0;
+    // read dump file
     uint8_t *dump = NULL;
-    int res = 0;
-    switch (dftype) {
-        case BIN: {
-            res = loadFile_safe(filename, ".bin", (void **)&dump, &dumplen);
-            break;
-        }
-        case EML: {
-            res = loadFileEML_safe(filename, (void **)&dump, &dumplen);
-            break;
-        }
-        case JSON: {
-            dumplen = 4 * 64;
-            dump = calloc(dumplen, sizeof(uint8_t));
-            if (dump == NULL) {
-                PrintAndLogEx(ERR, "error, cannot allocate memory");
-                return PM3_EMALLOC;
-            }
-            res = loadFileJSON(filename, (void *)dump, dumplen, &dumplen, NULL);
-            break;
-        }
-        case DICTIONARY: {
-            PrintAndLogEx(ERR, "error, only BIN/JSON/EML formats allowed");
-            return PM3_EINVARG;
-        }
-    }
-
+    size_t bytes_read = (4 * 64);
+    int res = pm3_load_dump(filename, (void **)&dump, &bytes_read, (4 * 64));
     if (res != PM3_SUCCESS) {
-        PrintAndLogEx(ERR, "error, something went wrong when loading file");
-        free(dump);
-        return PM3_EFILE;
+        return res;
     }
 
     // check dump len..
-    if (dumplen == 48 ||  dumplen == 4 * 64) {
+    if (bytes_read == 48 ||  bytes_read == 4 * 64) {
 
-        lf_hitag_t *payload =  calloc(1, sizeof(lf_hitag_t) + dumplen);
+        lf_hitag_t *payload =  calloc(1, sizeof(lf_hitag_t) + bytes_read);
 
         if (use_ht1)
             payload->type = 1;
@@ -297,14 +271,14 @@ static int CmdLFHitagEload(const char *Cmd) {
         if (use_htm)
             payload->type = 4;
 
-        payload->len = dumplen;
-        memcpy(payload->data, dump, dumplen);
+        payload->len = bytes_read;
+        memcpy(payload->data, dump, bytes_read);
 
         clearCommandBuffer();
-        SendCommandNG(CMD_LF_HITAG_ELOAD, (uint8_t *)payload, 3 + dumplen);
+        SendCommandNG(CMD_LF_HITAG_ELOAD, (uint8_t *)payload, 3 + bytes_read);
         free(payload);
     } else {
-        PrintAndLogEx(ERR, "error, wrong dump file size. got %zu", dumplen);
+        PrintAndLogEx(ERR, "error, wrong dump file size. got %zu", bytes_read);
     }
 
     free(dump);
@@ -880,14 +854,11 @@ static int CmdLFHitag2Dump(const char *Cmd) {
         PacketResponseNG resp;
         uint8_t *data = resp.data.asBytes;
         if (fnlen < 1) {
-            char *fptr = filename;
-            fptr += sprintf(fptr, "lf-hitag-");
+            char *fptr = filename + snprintf(filename, sizeof(filename), "lf-hitag-");
             FillFileNameByUID(fptr, data, "-dump", 4);
         }
 
-        saveFile(filename, ".bin", data, 48);
-        saveFileEML(filename, data, 48, 4);
-        saveFileJSON(filename, jsfHitag, data, 48, NULL);
+        pm3_save_dump(filename, data, 48, jsfHitag, 4);
     */
     return PM3_SUCCESS;
 }

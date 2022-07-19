@@ -140,6 +140,12 @@ if (NOT SKIPREADLINE EQUAL 1)
     if (READLINE_INCLUDE_DIRS AND READLINE_LIBRARIES)
         set(READLINE_FOUND ON)
     endif (READLINE_INCLUDE_DIRS AND READLINE_LIBRARIES)
+else (NOT SKIPREADLINE EQUAL 1)
+    if (NOT SKIPLINENOISE EQUAL 1)
+        if (EXISTS ${PM3_ROOT}/client/deps/linenoise/)
+            set(LINENOISE_LOCAL_FOUND ON)
+        endif (EXISTS ${PM3_ROOT}/client/deps/linenoise/)
+    endif (NOT SKIPLINENOISE EQUAL 1)
 endif (NOT SKIPREADLINE EQUAL 1)
 
 if (NOT SKIPJANSSONSYSTEM EQUAL 1)
@@ -269,6 +275,7 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/client/src/cmdhfepa.c
         ${PM3_ROOT}/client/src/cmdhffelica.c
         ${PM3_ROOT}/client/src/cmdhffido.c
+        ${PM3_ROOT}/client/src/cmdhffudan.c
         ${PM3_ROOT}/client/src/cmdhfgallagher.c
         ${PM3_ROOT}/client/src/cmdhfcipurse.c
         ${PM3_ROOT}/client/src/cmdhficlass.c
@@ -282,12 +289,15 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/client/src/cmdhfmfhard.c
         ${PM3_ROOT}/client/src/cmdhfmfp.c
         ${PM3_ROOT}/client/src/cmdhfmfu.c
+        ${PM3_ROOT}/client/src/cmdhfntag424.c
         ${PM3_ROOT}/client/src/cmdhfseos.c
         ${PM3_ROOT}/client/src/cmdhfst.c
         ${PM3_ROOT}/client/src/cmdhfst25ta.c
         ${PM3_ROOT}/client/src/cmdhfthinfilm.c
         ${PM3_ROOT}/client/src/cmdhftopaz.c
+        ${PM3_ROOT}/client/src/cmdhftexkom.c
         ${PM3_ROOT}/client/src/cmdhfwaveshare.c
+        ${PM3_ROOT}/client/src/cmdhfxerox.c
         ${PM3_ROOT}/client/src/cmdhw.c
         ${PM3_ROOT}/client/src/cmdlf.c
         ${PM3_ROOT}/client/src/cmdlfawid.c
@@ -352,7 +362,7 @@ set (TARGET_SOURCES
 
 add_custom_command(
     OUTPUT  ${CMAKE_BINARY_DIR}/version_pm3.c
-    COMMAND sh ${PM3_ROOT}/tools/mkversion.sh > ${CMAKE_BINARY_DIR}/version_pm3.c || perl ${PM3_ROOT}/tools/mkversion.pl > ${CMAKE_BINARY_DIR}/version_pm3.c || ${CMAKE_COMMAND} -E copy ${PM3_ROOT}/common/default_version_pm3.c ${CMAKE_BINARY_DIR}/version_pm3.c
+    COMMAND sh ${PM3_ROOT}/tools/mkversion.sh > ${CMAKE_BINARY_DIR}/version_pm3.c || ${CMAKE_COMMAND} -E copy ${PM3_ROOT}/common/default_version_pm3.c ${CMAKE_BINARY_DIR}/version_pm3.c
     DEPENDS ${PM3_ROOT}/common/default_version_pm3.c
 )
 
@@ -500,6 +510,18 @@ else (SKIPREADLINE EQUAL 1)
     endif (READLINE_FOUND)
 endif(SKIPREADLINE EQUAL 1)
 
+if (NOT READLINE_FOUND)
+    if (SKIPLINENOISE EQUAL 1)
+        message(STATUS "Linenoise library: skipped")
+    else (SKIPLINENOISE EQUAL 1)
+        if (LINENOISE_LOCAL_FOUND)
+            message(STATUS "Linenoise library: enabled")
+        else (LINENOISE_LOCAL_FOUND)
+            message(STATUS "Linenoise library: Linenoise not found, disabled")
+        endif (LINENOISE_LOCAL_FOUND)
+    endif (SKIPLINENOISE EQUAL 1)
+endif (NOT READLINE_FOUND)
+
 if (SKIPWHEREAMISYSTEM EQUAL 1)
     message(STATUS "Whereami library:  local library forced")
 else (SKIPWHEREAMISYSTEM EQUAL 1)
@@ -532,6 +554,8 @@ if (NOT SKIPPYTHON EQUAL 1)
     endif (PYTHON3EMBED_FOUND OR PYTHON3_FOUND)
 endif (NOT SKIPPYTHON EQUAL 1)
 message(STATUS "===================================================================")
+
+add_definitions(-DHAVE_SNPRINTF)
 
 add_executable(proxmark3
         ${PM3_ROOT}/client/src/proxmark3.c
@@ -577,6 +601,13 @@ endif (NOT APPLE)
 if (NOT JANSSON_FOUND)
     set(ADDITIONAL_LNK pm3rrg_rdv4_jansson ${ADDITIONAL_LNK})
 endif (NOT JANSSON_FOUND)
+
+if (NOT READLINE_FOUND)
+    if (LINENOISE_LOCAL_FOUND)
+        add_definitions("-DHAVE_LINENOISE")
+        set(ADDITIONAL_LNK pm3rrg_rdv4_linenoise ${ADDITIONAL_LNK})
+    endif (LINENOISE_LOCAL_FOUND)
+endif (NOT READLINE_FOUND)
 
 if (NOT WHEREAMI_FOUND)
     set(ADDITIONAL_LNK pm3rrg_rdv4_whereami ${ADDITIONAL_LNK})

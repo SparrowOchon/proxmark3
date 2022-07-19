@@ -426,7 +426,7 @@ void memcpy_filter_rlmarkers(void *dest, const void *src, size_t n) {
     uint8_t *rdest = (uint8_t *)dest;
     uint8_t *rsrc = (uint8_t *)src;
     uint16_t si = 0;
-    for (uint16_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; i++) {
         if ((rsrc[i] == '\001') || (rsrc[i] == '\002'))
             // skip readline special markers
             continue;
@@ -440,7 +440,7 @@ void memcpy_filter_ansi(void *dest, const void *src, size_t n, bool filter) {
         uint8_t *rdest = (uint8_t *)dest;
         uint8_t *rsrc = (uint8_t *)src;
         uint16_t si = 0;
-        for (uint16_t i = 0; i < n; i++) {
+        for (size_t i = 0; i < n; i++) {
             if ((i < n - 1)
                     && (rsrc[i] == '\x1b')
                     && (rsrc[i + 1] >= 0x40)
@@ -531,7 +531,7 @@ void memcpy_filter_emoji(void *dest, const void *src, size_t n, emojiMode_t mode
         char *rdest = (char *)dest;
         char *rsrc = (char *)src;
         uint16_t si = 0;
-        for (uint16_t i = 0; i < n; i++) {
+        for (size_t i = 0; i < n; i++) {
             current_char = rsrc[i];
 
             if (current_token_length == 0) {
@@ -719,18 +719,13 @@ void print_progress(size_t count, uint64_t max, barMode_t style) {
         snprintf(cbar,  collen,  "%s", bar);
     }
 
-    size_t olen = strlen(cbar) + 40;
-    char *out = (char *)calloc(olen, sizeof(uint8_t));
-
     switch (style) {
         case STYLE_BAR: {
-            sprintf(out, "%s", cbar);
-            printf("\b%c[2K\r[" _YELLOW_("=")"] %s", 27, out);
+            printf("\b%c[2K\r[" _YELLOW_("=")"] %s", 27, cbar);
             break;
         }
         case STYLE_MIXED: {
-            sprintf(out, "%s [ %zu mV / %2u V / %2u Vmax ]", cbar, count, (uint32_t)(count / 1000), (uint32_t)(max / 1000));
-            printf("\b%c[2K\r[" _YELLOW_("=")"] %s", 27, out);
+            printf("\b%c[2K\r[" _YELLOW_("=")"] %s [ %zu mV / %2u V / %2u Vmax ]", 27, cbar, count, (uint32_t)(count / 1000), (uint32_t)(max / 1000));
             break;
         }
         case STYLE_VALUE: {
@@ -739,7 +734,6 @@ void print_progress(size_t count, uint64_t max, barMode_t style) {
         }
     }
     fflush(stdout);
-    free(out);
     free(bar);
     free(cbar);
 }

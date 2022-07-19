@@ -9,12 +9,10 @@
 #define lconfig_h
 
 #if defined(__APPLE__)
-     #include "TargetConditionals.h"
-     #if TARGET_OS_IOS || TARGET_OS_WATCH || TARGET_OS_TV
-         #define system(s) ((s)==NULL ? 0 : -1)
-     #endif // end iOS
-#elif defined(__ANDROID__)
-     #define system(s) ((s)==NULL ? 0 : -1)
+#include "TargetConditionals.h"
+#if TARGET_OS_IOS || TARGET_OS_WATCH || TARGET_OS_TV
+#define system(s) ((s)==NULL ? 0 : -1)
+#endif // end iOS
 #endif
 
 #include <limits.h>
@@ -410,7 +408,7 @@
 */
 #define LUA_NUMBER_SCAN "%lf"
 #define LUA_NUMBER_FMT "%.14g"
-#define lua_number2str(s,n) sprintf((s), LUA_NUMBER_FMT, (n))
+#define lua_number2str(s,l,n) snprintf((s), (l), LUA_NUMBER_FMT, (n))
 #define LUAI_MAXNUMBER2STR 32 /* 16 digits, sign, point, and \0 */
 
 

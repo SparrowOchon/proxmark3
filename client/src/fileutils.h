@@ -47,6 +47,7 @@ typedef enum {
     jsfEM4x69,
     jsfEM4x50,
     jsfFido,
+    jsfFudan,
 } JSONFileType;
 
 typedef enum {
@@ -260,4 +261,17 @@ int searchFile(char **foundpath, const char *pm3dir, const char *searchname, con
  * @return
  */
 DumpFileType_t getfiletype(const char *filename);
+
+
+/**
+ * @brief load dump file into a data array dynamically allocated
+ * @param fn
+ * @param pdump pointer to loaded dump
+ * @param dumplen the number of bytes loaded from dump file
+ * @param maxdumplen maximum size of data array in bytes (JSON files)
+ * @return PM3_SUCCESS if OK
+ */
+int pm3_load_dump(const char *fn, void **pdump, size_t *dumplen, size_t maxdumplen);
+
+int pm3_save_dump(const char *fn, uint8_t *d, size_t n, JSONFileType jsft, size_t blocksize);
 #endif // FILEUTILS_H

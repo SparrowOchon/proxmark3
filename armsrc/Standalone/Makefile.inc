@@ -57,6 +57,10 @@ endif
 ifneq (,$(findstring WITH_STANDALONE_HF_14ASNIFF,$(APP_CFLAGS)))
     SRC_STANDALONE = hf_14asniff.c
 endif
+# WITH_STANDALONE_HF_14BSNIFF
+ifneq (,$(findstring WITH_STANDALONE_HF_14BSNIFF,$(APP_CFLAGS)))
+    SRC_STANDALONE = hf_14bsniff.c
+endif
 # WITH_STANDALONE_HF_15SNIFF
 ifneq (,$(findstring WITH_STANDALONE_HF_15SNIFF,$(APP_CFLAGS)))
     SRC_STANDALONE = hf_15sniff.c
@@ -85,6 +89,10 @@ endif
 ifneq (,$(findstring WITH_STANDALONE_LF_EM4100RSWB,$(APP_CFLAGS)))
     SRC_STANDALONE = lf_em4100rswb.c
 endif
+# WITH_STANDALONE_LF_EM4100RSWW
+ifneq (,$(findstring WITH_STANDALONE_LF_EM4100RSWW,$(APP_CFLAGS)))
+    SRC_STANDALONE = lf_em4100rsww.c
+endif
 # WITH_STANDALONE_LF_EM4100RWC
 ifneq (,$(findstring WITH_STANDALONE_LF_EM4100RWC,$(APP_CFLAGS)))
     SRC_STANDALONE = lf_em4100rwc.c
@@ -92,6 +100,10 @@ endif
 # WITH_STANDALONE_HF_LEGIC
 ifneq (,$(findstring WITH_STANDALONE_HF_LEGIC,$(APP_CFLAGS)))
    SRC_STANDALONE = hf_legic.c
+endif
+# WITH_STANDALONE_HF_LEGICSIM
+ifneq (,$(findstring WITH_STANDALONE_HF_LEGICSIM,$(APP_CFLAGS)))
+   SRC_STANDALONE = hf_legicsim.c
 endif
 # WITH_STANDALONE_HF_MSDSAL
 ifneq (,$(findstring WITH_STANDALONE_HF_MSDSAL,$(APP_CFLAGS)))

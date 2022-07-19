@@ -716,7 +716,8 @@ static const uint8_t jpeg_header[4] = { 0xFF, 0xD8, 0xFF, 0xE0 };
 static const uint8_t jpeg2k_header[6] = { 0x00, 0x00, 0x00, 0x0C, 0x6A, 0x50 };
 
 static int emrtd_dump_ef_dg2(uint8_t *file_contents, size_t file_length, const char *path) {
-    int offset, datalen = 0;
+    size_t offset;
+    int datalen = 0;
 
     // This is a hacky impl that just looks for the image header. I'll improve it eventually.
     // based on mrpkey.py
@@ -738,6 +739,7 @@ static int emrtd_dump_ef_dg2(uint8_t *file_contents, size_t file_length, const c
     char *filepath = calloc(strlen(path) + 100, sizeof(char));
     if (filepath == NULL)
         return PM3_EMALLOC;
+
     strcpy(filepath, path);
     strncat(filepath, PATHSEP, 2);
     strcat(filepath, dg_table[EF_DG2].filename);
@@ -887,7 +889,7 @@ static bool emrtd_do_bac(char *documentnumber, char *dob, char *expiry, uint8_t 
     char expirycd = emrtd_calculate_check_digit(expiry);
 
     char kmrz[25];
-    sprintf(kmrz, "%s%i%s%i%s%i", documentnumber, documentnumbercd, dob, dobcd, expiry, expirycd);
+    snprintf(kmrz, sizeof(kmrz), "%s%i%s%i%s%i", documentnumber, documentnumbercd, dob, dobcd, expiry, expirycd);
     PrintAndLogEx(DEBUG, "kmrz.............. " _GREEN_("%s"), kmrz);
 
     uint8_t kseed[20] = { 0x00 };
@@ -1281,16 +1283,16 @@ static void emrtd_print_issuance(char *data, bool ascii) {
 
 static void emrtd_print_personalization_timestamp(uint8_t *data) {
     char str_date[0x0F] = { 0x00 };
-    strcpy(str_date, sprint_hex_inrow(data, 0x0E));
+    strncpy(str_date, sprint_hex_inrow(data, 0x07), sizeof(str_date) - 1);
     char final_date[20] = { 0x00 };
-    sprintf(final_date, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s", str_date, str_date + 4, str_date + 6, str_date + 8, str_date + 10, str_date + 12);
+    snprintf(final_date, sizeof(final_date), "%.4s-%.2s-%.2s %.2s:%.2s:%.2s", str_date, str_date + 4, str_date + 6, str_date + 8, str_date + 10, str_date + 12);
 
     PrintAndLogEx(SUCCESS, "Personalization at....: " _YELLOW_("%s"), final_date);
 }
 
 static void emrtd_print_unknown_timestamp_5f85(uint8_t *data) {
     char final_date[20] = { 0x00 };
-    sprintf(final_date, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s", data, data + 4, data + 6, data + 8, data + 10, data + 12);
+    snprintf(final_date, sizeof(final_date), "%.4s-%.2s-%.2s %.2s:%.2s:%.2s", data, data + 4, data + 6, data + 8, data + 10, data + 12);
 
     PrintAndLogEx(SUCCESS, "Unknown timestamp 5F85: " _YELLOW_("%s"), final_date);
     PrintAndLogEx(HINT, "This is very likely the personalization timestamp, but it is using an undocumented tag.");
@@ -1433,11 +1435,12 @@ static int emrtd_print_ef_dg2_info(uint8_t *data, size_t datalen) {
 
     bool is_jpg = (data[offset] == 0xFF);
 
-    char *fn = calloc(strlen(dg_table[EF_DG2].filename) + 4 + 1, sizeof(uint8_t));
+    size_t fn_len = strlen(dg_table[EF_DG2].filename) + 4 + 1;
+    char *fn = calloc(fn_len, sizeof(uint8_t));
     if (fn == NULL)
         return PM3_EMALLOC;
 
-    sprintf(fn, "%s.%s", dg_table[EF_DG2].filename, (is_jpg) ? "jpg" : "jp2");
+    snprintf(fn, fn_len * sizeof(uint8_t), "%s.%s", dg_table[EF_DG2].filename, (is_jpg) ? "jpg" : "jp2");
 
     PrintAndLogEx(DEBUG, "image filename `" _YELLOW_("%s") "`", fn);
 
@@ -1492,11 +1495,12 @@ static int emrtd_print_ef_dg5_info(uint8_t *data, size_t datalen) {
 
     bool is_jpg = (data[offset] == 0xFF);
 
-    char *fn = calloc(strlen(dg_table[EF_DG5].filename) + 4 + 1, sizeof(uint8_t));
+    size_t fn_len = strlen(dg_table[EF_DG5].filename) + 4 + 1;
+    char *fn = calloc(fn_len, sizeof(uint8_t));
     if (fn == NULL)
         return PM3_EMALLOC;
 
-    sprintf(fn, "%s.%s", dg_table[EF_DG5].filename, (is_jpg) ? "jpg" : "jp2");
+    snprintf(fn, fn_len * sizeof(uint8_t), "%s.%s", dg_table[EF_DG5].filename, (is_jpg) ? "jpg" : "jp2");
 
     PrintAndLogEx(DEBUG, "image filename `" _YELLOW_("%s") "`", fn);
 
@@ -1817,7 +1821,7 @@ static int emrtd_parse_ef_sod_hashes(uint8_t *data, size_t datalen, uint8_t *has
     return PM3_SUCCESS;
 }
 
-static int emrtd_print_ef_sod_info(uint8_t *dg_hashes_calc, uint8_t *dg_hashes_sod, int hash_algo) {
+static int emrtd_print_ef_sod_info(uint8_t *dg_hashes_calc, uint8_t *dg_hashes_sod, int hash_algo, bool fastdump) {
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "-------------------- " _CYAN_("EF_SOD") " --------------------");
 
@@ -1835,7 +1839,11 @@ static int emrtd_print_ef_sod_info(uint8_t *dg_hashes_calc, uint8_t *dg_hashes_s
             if (calc_all_zero == true && sod_all_zero == true) {
                 continue;
             } else if (calc_all_zero == true) {
-                PrintAndLogEx(SUCCESS, "EF_DG%i: " _YELLOW_("File couldn't be read, but is in EF_SOD."), i);
+                if (fastdump && !dg_table[i].fastdump && !dg_table[i].pace && !dg_table[i].eac) {
+                    PrintAndLogEx(SUCCESS, "EF_DG%i: " _YELLOW_("File was skipped, but is in EF_SOD."), i);
+                } else {
+                    PrintAndLogEx(SUCCESS, "EF_DG%i: " _YELLOW_("File couldn't be read, but is in EF_SOD."), i);
+                }
             } else if (sod_all_zero == true) {
                 PrintAndLogEx(SUCCESS, "EF_DG%i: " _YELLOW_("File is not in EF_SOD."), i);
             } else if (hash_matches == false) {
@@ -2010,7 +2018,7 @@ int infoHF_EMRTD(char *documentnumber, char *dob, char *expiry, bool BAC_availab
     }
     DropField();
 
-    emrtd_print_ef_sod_info(*dg_hashes_calc, *dg_hashes_sod, hash_algo);
+    emrtd_print_ef_sod_info(*dg_hashes_calc, *dg_hashes_sod, hash_algo, true);
 
     return PM3_SUCCESS;
 }
@@ -2075,6 +2083,11 @@ int infoHF_EMRTD_offline(const char *path) {
         return PM3_ESOFT;
     }
 
+    // coverity scan CID 395630,
+    if (data != NULL) {
+        return PM3_ESOFT;
+    }
+
     res = emrtd_parse_ef_sod_hashes(data, datalen, *dg_hashes_sod, &hash_algo);
     if (res != PM3_SUCCESS) {
         PrintAndLogEx(ERR, "Failed to read hash list from EF_SOD. Hash checks will fail.");
@@ -2110,7 +2123,7 @@ int infoHF_EMRTD_offline(const char *path) {
     }
     free(filepath);
 
-    emrtd_print_ef_sod_info(*dg_hashes_calc, *dg_hashes_sod, hash_algo);
+    emrtd_print_ef_sod_info(*dg_hashes_calc, *dg_hashes_sod, hash_algo, false);
 
     return PM3_SUCCESS;
 }
@@ -2317,6 +2330,10 @@ static int CmdHFeMRTDInfo(const char *Cmd) {
     uint8_t path[FILENAME_MAX] = { 0x00 };
     bool is_offline = CLIParamStrToBuf(arg_get_str(ctx, 5), path, sizeof(path), &slen) == 0 && slen > 0;
     CLIParserFree(ctx);
+    if ((! IfPm3Iso14443()) && (! is_offline)) {
+        PrintAndLogEx(WARNING, "Only offline mode is available");
+        error = true;
+    }
     if (error) {
         return PM3_ESOFT;
     }

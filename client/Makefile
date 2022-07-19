@@ -78,6 +78,14 @@ JANSSONLIBINC = -I$(JANSSONLIBPATH)
 JANSSONLIB = $(JANSSONLIBPATH)/libjansson.a
 JANSSONLIBLD =
 
+## Linenoise
+# Can be used if Readline is unavailable or explicitely disabled
+# Requires to be unpacked, see deps/get_linenoise.sh
+LINENOISELIBPATH = ./deps/linenoise
+LINENOISELIBINC = -I$(LINENOISELIBPATH)
+LINENOISELIB = $(LINENOISELIBPATH)/liblinenoise.a
+LINENOISELIBLD =
+
 ## Lua
 LUALIBPATH = ./deps/liblua
 LUALIBINC = -I$(LUALIBPATH)
@@ -145,6 +153,9 @@ PM3INCLUDES += $(CLIPARSERLIBINC)
 STATICLIBS += $(HARDNESTEDLIB)
 LDLIBS +=$(HARDNESTEDLIBLD)
 PM3INCLUDES += $(HARDNESTEDLIBINC)
+
+## Linenoise
+# wait to see if Readline is available
 
 ## Lua
 ifneq ($(SKIPLUASYSTEM),1)
@@ -325,6 +336,16 @@ ifneq ($(SKIPREADLINE),1)
 
     LDLIBS += -lreadline
     READLINE_FOUND = 1
+else
+## Linenoise
+    ifneq ($(SKIPLINENOISE),1)
+        ifneq (,$(wildcard $(LINENOISELIBPATH)))
+            STATICLIBS += $(LINENOISELIB)
+            LDLIBS += $(LINENOISELIBLD)
+            PM3INCLUDES += $(LINENOISELIBINC)
+            LINENOISE_LOCAL_FOUND = 1
+		endif
+    endif
 endif
 
 ########
@@ -344,7 +365,7 @@ endif
 CFLAGS ?= $(DEFCFLAGS)
 # We cannot just use CFLAGS+=... because it has impact on sub-makes if CFLAGS is defined in env:
 PM3CFLAGS = $(CFLAGS)
-PM3CFLAGS += -I./src -I./include -I../include -I../common -I../common_fpga $(PM3INCLUDES) $(INCLUDES)
+PM3CFLAGS += -g -I./src -I./include -I../include -I../common -I../common_fpga $(PM3INCLUDES) $(INCLUDES)
 # WIP Testing
 #PM3CFLAGS += -std=c11 -pedantic
 
@@ -362,6 +383,10 @@ ifeq ($(READLINE_FOUND),1)
     PM3CFLAGS += -DHAVE_READLINE
 endif
 
+ifeq ($(LINENOISE_LOCAL_FOUND),1)
+    PM3CFLAGS += -DHAVE_LINENOISE
+endif
+
 ifeq ($(BT_FOUND),1)
     PM3CFLAGS += -DHAVE_BLUEZ
 endif
@@ -377,6 +402,8 @@ ifeq ($(SWIG_PYTHON_FOUND),1)
     PM3CFLAGS += -DHAVE_PYTHON_SWIG
 endif
 
+PM3CFLAGS += -DHAVE_SNPRINTF
+
 CXXFLAGS ?= -Wall -Werror -O3
 PM3CXXFLAGS = $(CXXFLAGS)
 PM3CXXFLAGS += -I../include -I./include
@@ -389,6 +416,8 @@ ifeq ($(QT_FOUND),1)
         PM3CXXFLAGS += -fPIC -std=c++11
     endif
 endif
+
+PM3CXXFLAGS += -DHAVE_SNPRINTF
 
 LDFLAGS ?= $(DEFLDFLAGS)
 PM3LDFLAGS = $(LDFLAGS)
@@ -466,6 +495,18 @@ else
     endif
 endif
 
+ifneq ($(READLINE_FOUND),1)
+    ifeq ($(SKIPLINENOISE),1)
+        $(info Linenoise library: skipped)
+    else
+        ifeq ($(LINENOISE_LOCAL_FOUND),1)
+            $(info Linenoise library: enabled)
+        else
+            $(info Linenoise library: Linenoise not found, disabled)
+        endif
+    endif
+endif
+
 ifeq ($(SKIPWHEREAMISYSTEM),1)
     $(info Whereami library:  local library forced)
 else
@@ -516,6 +557,7 @@ SRCS =  mifare/aiddesfire.c \
 		cmdhfemrtd.c \
 		cmdhffelica.c \
 		cmdhffido.c \
+		cmdhffudan.c \
 		cmdhfgallagher.c \
 		cmdhfksx6924.c \
 		cmdhfcipurse.c \
@@ -529,12 +571,15 @@ SRCS =  mifare/aiddesfire.c \
 		cmdhfmfhard.c \
 		cmdhfmfu.c \
 		cmdhfmfp.c \
+		cmdhfntag424.c \
 		cmdhfseos.c \
 		cmdhfst.c \
 		cmdhfst25ta.c \
 		cmdhfthinfilm.c \
 		cmdhftopaz.c \
+		cmdhftexkom.c \
 		cmdhfwaveshare.c \
+		cmdhfxerox.c \
 		cmdhw.c \
 		cmdlf.c \
 		cmdlfawid.c \
@@ -737,6 +782,9 @@ clean:
 	$(Q)$(MAKE) --no-print-directory -C $(CLIPARSERLIBPATH) clean
 	$(Q)$(MAKE) --no-print-directory -C $(HARDNESTEDLIBPATH) clean
 	$(Q)$(MAKE) --no-print-directory -C $(JANSSONLIBPATH) clean
+ifeq ($(LINENOISE_LOCAL_FOUND), 1)
+	$(Q)$(MAKE) --no-print-directory -C $(LINENOISELIBPATH) clean
+endif
 	$(Q)$(MAKE) --no-print-directory -C $(LUALIBPATH) clean
 	$(Q)$(MAKE) --no-print-directory -C $(REVENGLIBPATH) clean
 	$(Q)$(MAKE) --no-print-directory -C $(TINYCBORLIBPATH) clean
@@ -747,23 +795,23 @@ clean:
 install: all
 	$(info [@] Installing client to $(DESTDIR)$(PREFIX)...)
 ifneq (,$(INSTALLBIN))
-	    $(Q)$(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)
-	    $(Q)$(CP) $(INSTALLBIN) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)
+	    $(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)
+	    $(Q)$(INSTALLSUDO) $(CP) $(INSTALLBIN) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)
 endif
 ifneq (,$(INSTALLSHARE))
-	    $(Q)$(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
-	    $(Q)$(CP) $(INSTALLSHARE) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
-	    $(Q)$(CP) src/pm3.py $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)/pyscripts
+	    $(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
+	    $(Q)$(INSTALLSUDO) $(CP) $(INSTALLSHARE) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
+	    $(Q)$(INSTALLSUDO) $(CP) src/pm3.py $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)/pyscripts
 endif
 	@true
 
 uninstall:
 	$(info [@] Uninstalling client from $(DESTDIR)$(PREFIX)...)
 ifneq (,$(INSTALLBIN))
-	    $(Q)$(RM) $(foreach tool,$(INSTALLBIN),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)$(PATHSEP)$(notdir $(tool)))
+	    $(Q)$(INSTALLSUDO) $(RM) $(foreach tool,$(INSTALLBIN),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)$(PATHSEP)$(notdir $(tool)))
 endif
 ifneq (,$(INSTALLSHARE))
-	    $(Q)$(RMDIR) $(foreach tool,$(INSTALLSHARE),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)$(PATHSEP)$(notdir $(tool)))
+	    $(Q)$(INSTALLSUDO) $(RMDIR) $(foreach tool,$(INSTALLSHARE),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)$(PATHSEP)$(notdir $(tool)))
 endif
 	@true
 
@@ -790,6 +838,12 @@ $(JANSSONLIB): .FORCE
 ifneq ($(JANSSON_FOUND),1)
 	$(info [*] MAKE $@)
 	$(Q)$(MAKE) --no-print-directory -C $(JANSSONLIBPATH) all
+endif
+
+$(LINENOISELIB): .FORCE
+ifeq ($(LINENOISE_LOCAL_FOUND), 1)
+	$(info [*] MAKE $@)
+	$(Q)$(MAKE) --no-print-directory -C $(LINENOISELIBPATH) all
 endif
 
 $(LUALIB): .FORCE
@@ -835,9 +889,9 @@ src/pm3_pywrap.c: pm3.i
 .PHONY: all clean install uninstall tarbin .FORCE
 
 # version_pm3.c should be remade on every compilation
-src/version_pm3.c: default_version_pm3.c
+src/version_pm3.c: default_version_pm3.c .FORCE
 	$(info [=] GEN $@)
-	$(Q)$(SH) ../tools/mkversion.sh > $@ || $(PERL) ../tools/mkversion.pl > $@ || $(CP) $< $@
+	$(Q)$(SH) ../tools/mkversion.sh > $@ || $(CP) $< $@
 
 # easy printing of MAKE VARIABLES
 print-%: ; @echo $* = $($*)

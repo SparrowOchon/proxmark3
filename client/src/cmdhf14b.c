@@ -42,6 +42,9 @@
 // client side time out, waiting for device to ask tag a APDU to answer
 #define APDU_TIMEOUT    2000
 
+// for static arrays
+#define ST25TB_SR_BLOCK_SIZE 4
+
 // iso14b apdu input frame length
 static uint16_t apdu_frame_length = 0;
 //static uint16_t ats_fsc[] = {16, 24, 32, 40, 48, 64, 96, 128, 256};
@@ -191,7 +194,7 @@ static bool wait_cmd_14b(bool verbose, bool is_select, uint32_t timeout) {
             bool crc = check_crc(CRC_14443_B, data, len);
 
             PrintAndLogEx(SUCCESS, "received " _YELLOW_("%u") " bytes", len);
-            PrintAndLogEx(SUCCESS, "%s[%02X %02X] %s",
+            PrintAndLogEx(SUCCESS, "%s[%02X %02X] ( %s )",
                           sprint_hex(data, len - 2),
                           data[len - 2],
                           data[len - 1],
@@ -283,6 +286,7 @@ static int CmdHF14BCmdRaw(const char *Cmd) {
         arg_lit0("s", "std", "activate field, use ISO14B select"),
         arg_lit0(NULL, "sr", "activate field, use SRx ST select"),
         arg_lit0(NULL, "cts", "activate field, use ASK C-ticket select"),
+        arg_lit0(NULL, "xrx", "activate field, use Fuji/Xerox select"),
         arg_lit0("c", "crc", "calculate and append CRC"),
         arg_lit0("r", NULL, "do not read response from card"),
         arg_int0("t", "timeout", "<dec>", "timeout in ms"),
@@ -296,10 +300,11 @@ static int CmdHF14BCmdRaw(const char *Cmd) {
     bool select_std = arg_get_lit(ctx, 2);
     bool select_sr = arg_get_lit(ctx, 3);
     bool select_cts = arg_get_lit(ctx, 4);
-    bool add_crc = arg_get_lit(ctx, 5);
-    bool read_reply = (arg_get_lit(ctx, 6) == false);
-    int user_timeout = arg_get_int_def(ctx, 7, -1);
-    bool verbose = arg_get_lit(ctx, 8);
+    bool select_xrx = arg_get_lit(ctx, 5);
+    bool add_crc = arg_get_lit(ctx, 6);
+    bool read_reply = (arg_get_lit(ctx, 7) == false);
+    int user_timeout = arg_get_int_def(ctx, 8, -1);
+    bool verbose = arg_get_lit(ctx, 9);
 
     uint32_t flags = ISO14B_CONNECT;
     if (add_crc) {
@@ -318,11 +323,15 @@ static int CmdHF14BCmdRaw(const char *Cmd) {
         flags |= (ISO14B_SELECT_CTS | ISO14B_CLEARTRACE);
         if (verbose)
             PrintAndLogEx(INFO, "using ASK/C-ticket select");
+    } else if (select_xrx) {
+        flags |= (ISO14B_SELECT_XRX | ISO14B_CLEARTRACE);
+        if (verbose)
+            PrintAndLogEx(INFO, "using Fuji/Xerox select");
     }
 
     uint8_t data[PM3_CMD_DATA_SIZE] = {0x00};
     int datalen = 0;
-    int res = CLIParamHexToBuf(arg_get_str(ctx, 9), data, sizeof(data), &datalen);
+    int res = CLIParamHexToBuf(arg_get_str(ctx, 10), data, sizeof(data), &datalen);
     if (res && verbose) {
         PrintAndLogEx(INFO, "called with no raw bytes");
     }
@@ -395,6 +404,12 @@ static int CmdHF14BCmdRaw(const char *Cmd) {
             PrintAndLogEx(SUCCESS, "Got response for ASK/C-ticket select");
     }
 
+    if (select_xrx) {
+        success = wait_cmd_14b(verbose, true, user_timeout);
+        if (verbose && success)
+            PrintAndLogEx(SUCCESS, "Got response for Fuji/Xerox select");
+    }
+
     // get back response from the raw bytes you sent.
     if (success && datalen > 0) {
         wait_cmd_14b(true, false, user_timeout);
@@ -403,10 +418,14 @@ static int CmdHF14BCmdRaw(const char *Cmd) {
     return PM3_SUCCESS;
 }
 
-static bool get_14b_UID(iso14b_card_select_t *card) {
+static bool get_14b_UID(uint8_t *d, iso14b_type_t *found_type) {
 
-    if (card == NULL)
+    // sanity checks
+    if (d == NULL || found_type == NULL) {
         return false;
+    }
+
+    *found_type = ISO14B_NONE;
 
     iso14b_raw_cmd_t packet = {
         .flags = (ISO14B_CONNECT | ISO14B_SELECT_SR | ISO14B_DISCONNECT),
@@ -417,11 +436,11 @@ static bool get_14b_UID(iso14b_card_select_t *card) {
     PacketResponseNG resp;
     clearCommandBuffer();
     SendCommandNG(CMD_HF_ISO14443B_COMMAND, (uint8_t *)&packet, sizeof(iso14b_raw_cmd_t));
-
     if (WaitForResponseTimeout(CMD_HF_ISO14443B_COMMAND, &resp, TIMEOUT)) {
 
         if (resp.oldarg[0] == 0) {
-            memcpy(card, (iso14b_card_select_t *)resp.data.asBytes, sizeof(iso14b_card_select_t));
+            memcpy(d, resp.data.asBytes, sizeof(iso14b_card_select_t));
+            *found_type = ISO14B_SR;
             return true;
         }
     }
@@ -433,7 +452,21 @@ static bool get_14b_UID(iso14b_card_select_t *card) {
     if (WaitForResponseTimeout(CMD_HF_ISO14443B_COMMAND, &resp, TIMEOUT)) {
 
         if (resp.oldarg[0] == 0) {
-            memcpy(card, (iso14b_card_select_t *)resp.data.asBytes, sizeof(iso14b_card_select_t));
+            memcpy(d, resp.data.asBytes, sizeof(iso14b_card_select_t));
+            *found_type = ISO14B_STANDARD;
+            return true;
+        }
+    }
+
+    // test CT
+    packet.flags = (ISO14B_CONNECT | ISO14B_SELECT_CTS | ISO14B_DISCONNECT);
+    clearCommandBuffer();
+    SendCommandNG(CMD_HF_ISO14443B_COMMAND, (uint8_t *)&packet, sizeof(iso14b_raw_cmd_t));
+    if (WaitForResponseTimeout(CMD_HF_ISO14443B_COMMAND, &resp, TIMEOUT)) {
+
+        if (resp.oldarg[0] == 0) {
+            memcpy(d, resp.data.asBytes, sizeof(iso14b_cts_card_select_t));
+            *found_type = ISO14B_CT;
             return true;
         }
     }
@@ -494,48 +527,31 @@ static int print_atqb_resp(uint8_t *data, uint8_t cid) {
 }
 
 // get SRx chip model (from UID) // from ST Microelectronics
-static char *get_st_chip_model(uint8_t data) {
-    static char model[20];
-    char *retStr = model;
-    memset(model, 0, sizeof(model));
-
+static const char *get_st_chip_model(uint8_t data) {
     switch (data) {
         case 0x0:
-            sprintf(retStr, "SRIX4K (Special)");
-            break;
+            return "SRIX4K (Special)";
         case 0x2:
-            sprintf(retStr, "SR176");
-            break;
+            return "SR176";
         case 0x3:
-            sprintf(retStr, "SRIX4K");
-            break;
+            return "SRIX4K";
         case 0x4:
-            sprintf(retStr, "SRIX512");
-            break;
+            return "SRIX512";
         case 0x6:
-            sprintf(retStr, "SRI512");
-            break;
+            return "SRI512";
         case 0x7:
-            sprintf(retStr, "SRI4K");
-            break;
+            return "SRI4K";
         case 0xC:
-            sprintf(retStr, "SRT512");
-            break;
+            return "SRT512";
         default :
-            sprintf(retStr, "Unknown");
-            break;
+            return "Unknown";
     }
-    return retStr;
 }
 
-static char *get_st_lock_info(uint8_t model, const uint8_t *lockbytes, uint8_t blk) {
-
-    static char str[16];
-    char *s = str;
-    sprintf(s, " ");
-
+#define ST_LOCK_INFO_EMPTY " "
+static const char *get_st_lock_info(uint8_t model, const uint8_t *lockbytes, uint8_t blk) {
     if (blk > 15) {
-        return s;
+        return ST_LOCK_INFO_EMPTY;
     }
 
     uint8_t mask = 0;
@@ -571,12 +587,12 @@ static char *get_st_lock_info(uint8_t model, const uint8_t *lockbytes, uint8_t b
                     mask = 0x80;
                     break;
                 default:
-                    return s;
+                    return ST_LOCK_INFO_EMPTY;
             }
             if ((lockbytes[1] & mask) == 0) {
-                sprintf(s, _RED_("1"));
+                return _RED_("1");
             }
-            return s;
+            return ST_LOCK_INFO_EMPTY;
         }
         case 0x4:   // SRIX512
         case 0x6:   // SRI512
@@ -642,9 +658,9 @@ static char *get_st_lock_info(uint8_t model, const uint8_t *lockbytes, uint8_t b
                     break;
             }
             if ((lockbytes[b] & mask) == 0) {
-                sprintf(s, _RED_("1"));
+                return _RED_("1");
             }
-            return s;
+            return ST_LOCK_INFO_EMPTY;
         }
         case 0x2: {  // SR176
             //need data[2]
@@ -684,14 +700,14 @@ static char *get_st_lock_info(uint8_t model, const uint8_t *lockbytes, uint8_t b
             }
             // iceman:  this is opposite!  need sample to test with.
             if ((lockbytes[0] & mask)) {
-                sprintf(s, _RED_("1"));
+                return _RED_("1");
             }
-            return s;
+            return ST_LOCK_INFO_EMPTY;
         }
         default:
             break;
     }
-    return s;
+    return ST_LOCK_INFO_EMPTY;
 }
 
 static uint8_t get_st_chipid(const uint8_t *uid) {
@@ -731,13 +747,78 @@ static void print_ct_general_info(void *vcard) {
     iso14b_cts_card_select_t card;
     memcpy(&card, (iso14b_cts_card_select_t *)vcard, sizeof(iso14b_cts_card_select_t));
 
-    uint32_t uid32 = (card.uid[0] | card.uid[1] << 8 | card.uid[2] << 16 | card.uid[3] << 24);
+    uint32_t uid32 = MemLeToUint4byte(card.uid);
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(SUCCESS, "ASK C-Ticket");
     PrintAndLogEx(SUCCESS, "           UID: " _GREEN_("%s") " ( " _YELLOW_("%010u") " )", sprint_hex(card.uid, sizeof(card.uid)), uid32);
     PrintAndLogEx(SUCCESS, "  Product Code: %02X", card.pc);
     PrintAndLogEx(SUCCESS, " Facility Code: %02X", card.fc);
     PrintAndLogEx(NORMAL, "");
+}
+
+static void print_hdr(void) {
+    PrintAndLogEx(INFO, " block#  | data         |lck| ascii");
+    PrintAndLogEx(INFO, "---------+--------------+---+----------");
+}
+
+static void print_footer(void) {
+    PrintAndLogEx(INFO, "---------+--------------+---+----------");
+    PrintAndLogEx(NORMAL, "");
+}
+
+/*
+static void print_ct_blocks(uint8_t *data, size_t len) {
+
+    size_t blocks = len / ST25TB_SR_BLOCK_SIZE;
+
+    print_hdr();
+
+    for (int i = 0; i <= blocks; i++) {
+        PrintAndLogEx(INFO,
+                      "%3d/0x%02X | %s | %s | %s",
+                      i,
+                      i,
+                      sprint_hex(data + (i * 4), 4),
+                      " ",
+                      sprint_ascii(data + (i * 4), 4)
+                     );
+    }
+    print_footer();
+}
+*/
+
+static void print_sr_blocks(uint8_t *data, size_t len) {
+
+    size_t blocks = len / ST25TB_SR_BLOCK_SIZE;
+    uint8_t chipid = get_st_chipid(data);
+    PrintAndLogEx(SUCCESS, _GREEN_("%s") " tag", get_st_chip_model(chipid));
+
+    PrintAndLogEx(DEBUG, "systemblock : %s", sprint_hex(data + (blocks * 4), 4));
+    PrintAndLogEx(DEBUG, "   otp lock : %02x %02x", data[(blocks * 4)], data[(blocks * 4) + 1]);
+
+    print_hdr();
+
+    for (int i = 0; i <= blocks; i++) {
+        PrintAndLogEx(INFO,
+                      "%3d/0x%02X | %s | %s | %s",
+                      i,
+                      i,
+                      sprint_hex(data + (i * 4), 4),
+                      get_st_lock_info(chipid, data + (blocks * 4), i),
+                      sprint_ascii(data + (i * 4), 4)
+                     );
+    }
+
+    PrintAndLogEx(INFO,
+                  "%3d/0x%02X | %s | %s | %s",
+                  0xFF,
+                  0xFF,
+                  sprint_hex(data + (0xFF * 4), 4),
+                  get_st_lock_info(chipid, data + (blocks * 4), 0xFF),
+                  sprint_ascii(data + (0xFF * 4), 4)
+                 );
+
+    print_footer();
 }
 
 // iceman, calypso?
@@ -1100,6 +1181,7 @@ static int CmdHF14BReader(const char *Cmd) {
     CLIParserInit(&ctx, "hf 14b reader",
                   "Act as a 14443B reader to identify a tag",
                   "hf 14b reader\n"
+                  "hf 14b reader -@   -> continuous reader mode"
                  );
 
     void *argtable[] = {
@@ -1258,7 +1340,7 @@ static int CmdHF14BWriteSri(const char *Cmd) {
 
     char str[36];
     memset(str, 0x00, sizeof(str));
-    sprintf(str, "--sr -c --data %02x%02x%02x%02x%02x%02x", ISO14443B_WRITE_BLK, blockno, data[0], data[1], data[2], data[3]);
+    snprintf(str, sizeof(str), "--sr -c --data %02x%02x%02x%02x%02x%02x", ISO14443B_WRITE_BLK, blockno, data[0], data[1], data[2], data[3]);
     return CmdHF14BCmdRaw(str);
 }
 
@@ -1285,169 +1367,164 @@ static int CmdHF14BDump(const char *Cmd) {
     CLIParamStrToBuf(arg_get_str(ctx, 1), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
     CLIParserFree(ctx);
 
-    iso14b_card_select_t card;
-    if (get_14b_UID(&card) == false) {
+
+    uint8_t select[sizeof(iso14b_card_select_t)] = {0};
+    iso14b_type_t select_cardtype = ISO14B_NONE;
+    if (get_14b_UID(select, &select_cardtype) == false) {
         PrintAndLogEx(WARNING, "no tag found");
         return PM3_SUCCESS;
     }
 
-    if (card.uidlen != 8) {
-        PrintAndLogEx(FAILED, "current dump command only work with SRI4K / SRI512 tags");
-        return PM3_SUCCESS;
-    }
+    if (select_cardtype == ISO14B_CT) {
+        iso14b_cts_card_select_t ct_card;
+        memcpy(&ct_card, (iso14b_cts_card_select_t *)&select, sizeof(iso14b_cts_card_select_t));
 
-    // detect cardsize
-    // 1 = 4096
-    // 2 = 512
-    uint8_t cardtype = get_st_cardsize(card.uid);
-    uint8_t blocks = 0;
-    uint16_t cardsize = 0;
+        uint32_t uid32 = MemLeToUint4byte(ct_card.uid);
+        PrintAndLogEx(SUCCESS, "UID: " _GREEN_("%s") " ( " _YELLOW_("%010u") " )", sprint_hex(ct_card.uid, 4), uid32);
 
-    switch (cardtype) {
-        case 2:
-            cardsize = (512 / 8) + 4;
-            blocks = 0x0F;
-            break;
-        case 1:
-        default:
-            cardsize = (4096 / 8) + 4;
-            blocks = 0x7F;
-            break;
-    }
+        // Have to figure out how large one of these are..
+        PrintAndLogEx(FAILED, "Dumping CT tags is not implemented yet.");
 
-    uint8_t chipid = get_st_chipid(card.uid);
-    PrintAndLogEx(SUCCESS, "found a " _GREEN_("%s") " tag", get_st_chip_model(chipid));
-
-    // detect blocksize from card :)
-    PrintAndLogEx(INFO, "reading tag memory from UID " _GREEN_("%s"), sprint_hex_inrow(SwapEndian64(card.uid, card.uidlen, 8), card.uidlen));
-
-    iso14b_raw_cmd_t *packet = (iso14b_raw_cmd_t *)calloc(1, sizeof(iso14b_raw_cmd_t) + 2);
-    if (packet == NULL) {
-        PrintAndLogEx(FAILED, "failed to allocate memory");
-        return PM3_EMALLOC;
-    }
-    packet->flags = (ISO14B_CONNECT | ISO14B_SELECT_SR);
-    packet->timeout = 0;
-    packet->rawlen = 0;
-
-    clearCommandBuffer();
-    SendCommandNG(CMD_HF_ISO14443B_COMMAND, (uint8_t *)packet, sizeof(iso14b_raw_cmd_t));
-    PacketResponseNG resp;
-
-    // select
-    int status;
-    if (WaitForResponseTimeout(CMD_HF_ISO14443B_COMMAND, &resp, 2000)) {
-        status = resp.oldarg[0];
-        if (status < 0) {
-            PrintAndLogEx(FAILED, "failed to select arg0[%" PRId64 "]", resp.oldarg[0]);
-            free(packet);
-            return switch_off_field_14b();
-        }
-    }
-
-    PrintAndLogEx(INFO, "." NOLF);
-
-    uint8_t data[cardsize];
-    memset(data, 0, sizeof(data));
-    uint16_t blocknum = 0;
-
-    for (int retry = 0; retry < 5; retry++) {
-
-        // set up the read command
-        packet->flags = (ISO14B_APPEND_CRC | ISO14B_RAW);
-        packet->rawlen = 2;
-        packet->raw[0] = ISO14443B_READ_BLK;
-        packet->raw[1] = blocknum & 0xFF;
-
-        clearCommandBuffer();
-        SendCommandNG(CMD_HF_ISO14443B_COMMAND, (uint8_t *)packet, sizeof(iso14b_raw_cmd_t) + 2);
-        if (WaitForResponseTimeout(CMD_HF_ISO14443B_COMMAND, &resp, 2000)) {
-
-            status = resp.oldarg[0];
-            if (status < 0) {
-                PrintAndLogEx(FAILED, "retrying one more time");
-                continue;
-            }
-
-            uint16_t len = (resp.oldarg[1] & 0xFFFF);
-            uint8_t *recv = resp.data.asBytes;
-
-            if (check_crc(CRC_14443_B, recv, len) == false) {
-                PrintAndLogEx(FAILED, "crc fail, retrying one more time");
-                continue;
-            }
-
-
-            // last read
-            if (blocknum == 0xFF) {
-                // we reserved space for this block after 0x0F and 0x7F,  ie 0x10, 0x80
-                memcpy(data + (blocks * 4), recv, 4);
-                break;
-            }
-            memcpy(data + (blocknum * 4), recv, 4);
-
-
-            retry = 0;
-            blocknum++;
-            if (blocknum > blocks) {
-                // read config block
-                blocknum = 0xFF;
-            }
-
-            PrintAndLogEx(NORMAL, "." NOLF);
-            fflush(stdout);
-        }
-    }
-    free(packet);
-
-    PrintAndLogEx(NORMAL, "");
-
-    if (blocknum != 0xFF) {
-        PrintAndLogEx(FAILED, "dump failed");
+        // print_ct_blocks(data, cardsize);
         return switch_off_field_14b();
     }
 
-    PrintAndLogEx(DEBUG, "systemblock : %s", sprint_hex(data + (blocks * 4), 4));
-    PrintAndLogEx(DEBUG, "   otp lock : %02x %02x", data[(blocks * 4)], data[(blocks * 4) + 1]);
-
-
-    PrintAndLogEx(INFO, " block#  | data         |lck| ascii");
-    PrintAndLogEx(INFO, "---------+--------------+---+----------");
-
-    for (int i = 0; i <= blocks; i++) {
-        PrintAndLogEx(INFO,
-                      "%3d/0x%02X | %s | %s | %s",
-                      i,
-                      i,
-                      sprint_hex(data + (i * 4), 4),
-                      get_st_lock_info(chipid, data + (blocks * 4), i),
-                      sprint_ascii(data + (i * 4), 4)
-                     );
+    if (select_cardtype == ISO14B_STANDARD) {
+        // Have to figure out how large one of these are..
+        PrintAndLogEx(FAILED, "Dumping Standard ISO14443-B tags is not implemented yet.");
+        // print_std_blocks(data, cardsize);
+        return switch_off_field_14b();
     }
 
-    PrintAndLogEx(INFO,
-                  "%3d/0x%02X | %s | %s | %s",
-                  0xFF,
-                  0xFF,
-                  sprint_hex(data + (0xFF * 4), 4),
-                  get_st_lock_info(chipid, data + (blocks * 4), 0xFF),
-                  sprint_ascii(data + (0xFF * 4), 4)
-                 );
-    PrintAndLogEx(INFO, "---------+--------------+---+----------");
-    PrintAndLogEx(NORMAL, "");
 
-    // save to file
-    if (fnlen < 1) {
-        PrintAndLogEx(INFO, "using UID as filename");
-        char *fptr = filename;
-        fptr += sprintf(fptr, "hf-14b-");
-        FillFileNameByUID(fptr, SwapEndian64(card.uid, card.uidlen, 8), "-dump", card.uidlen);
+    if (select_cardtype == ISO14B_SR) {
+        iso14b_card_select_t card;
+        memcpy(&card, (iso14b_card_select_t *)&select, sizeof(iso14b_card_select_t));
+
+        // detect cardsize
+        // 1 = 4096
+        // 2 = 512
+        uint8_t cardtype = get_st_cardsize(card.uid);
+        uint8_t blocks = 0;
+        uint16_t cardsize = 0;
+
+        switch (cardtype) {
+            case 2:
+                cardsize = (512 / 8) + 4;
+                blocks = 0x0F;
+                break;
+            case 1:
+            default:
+                cardsize = (4096 / 8) + 4;
+                blocks = 0x7F;
+                break;
+        }
+
+        uint8_t chipid = get_st_chipid(card.uid);
+        PrintAndLogEx(SUCCESS, "found a " _GREEN_("%s") " tag", get_st_chip_model(chipid));
+
+        // detect blocksize from card :)
+        PrintAndLogEx(INFO, "reading tag memory from UID " _GREEN_("%s"), sprint_hex_inrow(SwapEndian64(card.uid, card.uidlen, 8), card.uidlen));
+
+        iso14b_raw_cmd_t *packet = (iso14b_raw_cmd_t *)calloc(1, sizeof(iso14b_raw_cmd_t) + 2);
+        if (packet == NULL) {
+            PrintAndLogEx(FAILED, "failed to allocate memory");
+            return PM3_EMALLOC;
+        }
+        packet->flags = (ISO14B_CONNECT | ISO14B_SELECT_SR);
+        packet->timeout = 0;
+        packet->rawlen = 0;
+
+        clearCommandBuffer();
+        SendCommandNG(CMD_HF_ISO14443B_COMMAND, (uint8_t *)packet, sizeof(iso14b_raw_cmd_t));
+        PacketResponseNG resp;
+
+        // select SR tag
+        int status;
+        if (WaitForResponseTimeout(CMD_HF_ISO14443B_COMMAND, &resp, 2000)) {
+            status = resp.oldarg[0];
+            if (status < 0) {
+                PrintAndLogEx(FAILED, "failed to select arg0[%" PRId64 "]", resp.oldarg[0]);
+                free(packet);
+                return switch_off_field_14b();
+            }
+        }
+
+        PrintAndLogEx(INFO, "." NOLF);
+
+        uint8_t data[cardsize];
+        memset(data, 0, sizeof(data));
+        uint16_t blocknum = 0;
+
+        for (int retry = 0; retry < 5; retry++) {
+
+            // set up the read command
+            packet->flags = (ISO14B_APPEND_CRC | ISO14B_RAW);
+            packet->rawlen = 2;
+            packet->raw[0] = ISO14443B_READ_BLK;
+            packet->raw[1] = blocknum & 0xFF;
+
+            clearCommandBuffer();
+            SendCommandNG(CMD_HF_ISO14443B_COMMAND, (uint8_t *)packet, sizeof(iso14b_raw_cmd_t) + 2);
+            if (WaitForResponseTimeout(CMD_HF_ISO14443B_COMMAND, &resp, 2000)) {
+
+                status = resp.oldarg[0];
+                if (status < 0) {
+                    PrintAndLogEx(FAILED, "retrying one more time");
+                    continue;
+                }
+
+                uint16_t len = (resp.oldarg[1] & 0xFFFF);
+                uint8_t *recv = resp.data.asBytes;
+
+                if (check_crc(CRC_14443_B, recv, len) == false) {
+                    PrintAndLogEx(FAILED, "crc fail, retrying one more time");
+                    continue;
+                }
+
+
+                // last read
+                if (blocknum == 0xFF) {
+                    // we reserved space for this block after 0x0F and 0x7F,  ie 0x10, 0x80
+                    memcpy(data + (blocks * 4), recv, 4);
+                    break;
+                }
+                memcpy(data + (blocknum * 4), recv, 4);
+
+
+                retry = 0;
+                blocknum++;
+                if (blocknum > blocks) {
+                    // read config block
+                    blocknum = 0xFF;
+                }
+
+                PrintAndLogEx(NORMAL, "." NOLF);
+                fflush(stdout);
+            }
+        }
+        free(packet);
+
+        PrintAndLogEx(NORMAL, "");
+
+        if (blocknum != 0xFF) {
+            PrintAndLogEx(FAILED, "dump failed");
+            return switch_off_field_14b();
+        }
+
+        print_sr_blocks(data, cardsize);
+
+        // save to file
+        if (fnlen < 1) {
+            PrintAndLogEx(INFO, "using UID as filename");
+            char *fptr = filename + snprintf(filename, sizeof(filename), "hf-14b-");
+            FillFileNameByUID(fptr, SwapEndian64(card.uid, card.uidlen, 8), "-dump", card.uidlen);
+        }
+
+        size_t datalen = (blocks + 1) * 4;
+        pm3_save_dump(filename, data, datalen, jsf14b, 4);
     }
 
-    size_t datalen = (blocks + 1) * 4;
-    saveFile(filename, ".bin", data, datalen);
-    saveFileEML(filename, data, datalen, 4);
-    saveFileJSON(filename, jsf14b, data, datalen, NULL);
     return switch_off_field_14b();
 }
 /*
@@ -2026,6 +2103,54 @@ out:
     return res;
 }
 
+
+static int CmdHF14BView(const char *Cmd) {
+
+    CLIParserContext *ctx;
+    CLIParserInit(&ctx, "hf 14b view",
+                  "Print a ISO14443-B dump file (bin/eml/json)",
+                  "hf 14b view -f hf-14b-01020304-dump.bin"
+                 );
+    void *argtable[] = {
+        arg_param_begin,
+        arg_str1("f", "file", "<fn>", "filename of dump"),
+        arg_lit0("v", "verbose", "verbose output"),
+        arg_param_end
+    };
+    CLIExecWithReturn(ctx, Cmd, argtable, false);
+    int fnlen = 0;
+    char filename[FILE_PATH_SIZE];
+    CLIParamStrToBuf(arg_get_str(ctx, 1), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
+    bool verbose = arg_get_lit(ctx, 2);
+    CLIParserFree(ctx);
+
+    // read dump file
+    uint8_t *dump = NULL;
+    size_t bytes_read = 0;
+    int res = pm3_load_dump(filename, (void **)&dump, &bytes_read, (ST25TB_SR_BLOCK_SIZE * 0xFF));
+    if (res != PM3_SUCCESS) {
+        return res;
+    }
+
+    uint16_t block_cnt = bytes_read / ST25TB_SR_BLOCK_SIZE;
+
+    if (verbose) {
+        PrintAndLogEx(INFO, "File: " _YELLOW_("%s"), filename);
+        PrintAndLogEx(INFO, "File size %zu bytes, file blocks %d (0x%x)", bytes_read, block_cnt, block_cnt);
+    }
+
+    // figure out a way to identify the different dump files.
+    // STD/SR/CT is difference
+
+    print_sr_blocks(dump, bytes_read);
+    //print_std_blocks(dump, bytes_read);
+    //print_ct_blocks(dump, bytes_read);
+
+    free(dump);
+    return PM3_SUCCESS;
+}
+
+
 static command_t CommandTable[] = {
     {"help",        CmdHelp,          AlwaysAvailable, "This help"},
     {"apdu",        CmdHF14BAPDU,     IfPm3Iso14443b,  "Send ISO 14443-4 APDU to tag"},
@@ -2040,6 +2165,7 @@ static command_t CommandTable[] = {
     {"sniff",       CmdHF14BSniff,    IfPm3Iso14443b,  "Eavesdrop ISO-14443-B"},
     {"rdbl",        CmdHF14BSriRdBl,  IfPm3Iso14443b,  "Read SRI512/SRIX4x block"},
     {"sriwrite",    CmdHF14BWriteSri, IfPm3Iso14443b,  "Write data to a SRI512 or SRIX4K tag"},
+    {"view",        CmdHF14BView,     AlwaysAvailable, "Display content from tag dump file"},
 // {"valid",     srix4kValid,      AlwaysAvailable, "srix4k checksum test"},
     {NULL, NULL, NULL, NULL}
 };

@@ -322,12 +322,11 @@ const char *DesfireSelectWayToStr(DesfireISOSelectWay way) {
 
 char *DesfireWayIDStr(DesfireISOSelectWay way, uint32_t id) {
     static char str[200] = {0};
-    memset(str, 0, sizeof(str));
 
     if (way == ISWMF || way == ISWDFName)
-        sprintf(str, "%s", DesfireSelectWayToStr(way));
+        snprintf(str, sizeof(str), "%s", DesfireSelectWayToStr(way));
     else
-        sprintf(str, "%s %0*x", DesfireSelectWayToStr(way), (way == ISW6bAID) ? 6 : 4, id);
+        snprintf(str, sizeof(str), "%s %0*x", DesfireSelectWayToStr(way), (way == ISW6bAID) ? 6 : 4, id);
 
     return str;
 }
@@ -805,7 +804,8 @@ static void DesfireSplitBytesToBlock(uint8_t *blockdata, size_t *blockdatacount,
     }
 }
 
-int DesfireExchangeEx(bool activate_field, DesfireContext_t *ctx, uint8_t cmd, uint8_t *data, size_t datalen, uint8_t *respcode, uint8_t *resp, size_t *resplen, bool enable_chaining, size_t splitbysize) {
+int DesfireExchangeEx(bool activate_field, DesfireContext_t *ctx, uint8_t cmd, uint8_t *data, size_t datalen, uint8_t *respcode,
+                      uint8_t *resp, size_t *resplen, bool enable_chaining, size_t splitbysize) {
     int res = PM3_SUCCESS;
 
     if (!PrintChannelModeWarning(cmd, ctx->secureChannel, ctx->cmdSet, ctx->commMode))
@@ -1671,14 +1671,12 @@ void DesfireCheckAuthCommands(DesfireISOSelectWay way, uint32_t appID, char *dfn
 }
 
 void DesfireCheckAuthCommandsPrint(AuthCommandsChk_t *authCmdCheck) {
-    PrintAndLogEx(NORMAL, "auth: %s auth iso: %s auth aes: %s auth ev2: %s auth iso native: %s auth lrp: %s",
-                  authCmdCheck->auth ? _GREEN_("YES") : _RED_("NO"),
-                  authCmdCheck->authISO ? _GREEN_("YES") : _RED_("NO"),
-                  authCmdCheck->authAES ? _GREEN_("YES") : _RED_("NO"),
-                  authCmdCheck->authEV2 ? _GREEN_("YES") : _RED_("NO"),
-                  authCmdCheck->authISONative ? _GREEN_("YES") : _RED_("NO"),
-                  authCmdCheck->authLRP ? _GREEN_("YES") : _RED_("NO")
-                 );
+    PrintAndLogEx(SUCCESS, "   Auth.............. %s", authCmdCheck->auth ? _GREEN_("YES") : _RED_("NO"));
+    PrintAndLogEx(SUCCESS, "   Auth ISO.......... %s", authCmdCheck->authISO ? _GREEN_("YES") : _RED_("NO"));
+    PrintAndLogEx(SUCCESS, "   Auth AES.......... %s", authCmdCheck->authAES ? _GREEN_("YES") : _RED_("NO"));
+    PrintAndLogEx(SUCCESS, "   Auth Ev2.......... %s", authCmdCheck->authEV2 ? _GREEN_("YES") : _RED_("NO"));
+    PrintAndLogEx(SUCCESS, "   Auth ISO Native... %s", authCmdCheck->authISONative ? _GREEN_("YES") : _RED_("NO"));
+    PrintAndLogEx(SUCCESS, "   Auth LRP.......... %s", authCmdCheck->authLRP ? _GREEN_("YES") : _RED_("NO"));
 }
 
 int DesfireFillPICCInfo(DesfireContext_t *dctx, PICCInfo_t *PICCInfo, bool deepmode) {
@@ -1807,7 +1805,7 @@ void DesfirePrintPICCInfo(DesfireContext_t *dctx, PICCInfo_t *PICCInfo) {
     else
         PrintAndLogEx(SUCCESS, "Applications count: " _GREEN_("%zu") " free memory " _GREEN_("%d") " bytes", PICCInfo->appCount, PICCInfo->freemem);
     if (PICCInfo->authCmdCheck.checked) {
-        PrintAndLogEx(SUCCESS, "PICC level auth commands: " NOLF);
+        PrintAndLogEx(SUCCESS, "PICC level auth commands: ");
         DesfireCheckAuthCommandsPrint(&PICCInfo->authCmdCheck);
     }
     if (PICCInfo->numberOfKeys > 0) {
@@ -2251,10 +2249,11 @@ static const DesfireCreateFileCommands_t DesfireFileCommands[] = {
 };
 
 const DesfireCreateFileCommands_t *GetDesfireFileCmdRec(uint8_t type) {
-    for (int i = 0; i < ARRAYLEN(DesfireFileCommands); i++)
-        if (DesfireFileCommands[i].id == type)
+    for (int i = 0; i < ARRAYLEN(DesfireFileCommands); i++) {
+        if (DesfireFileCommands[i].id == type) {
             return &DesfireFileCommands[i];
-
+        }
+    }
     return NULL;
 }
 
@@ -2296,12 +2295,12 @@ static const char *GetDesfireKeyType(uint8_t keytype) {
 
 const char *GetDesfireAccessRightStr(uint8_t right) {
     static char int_access_str[200];
-    memset(int_access_str, 0, sizeof(int_access_str));
 
     if (right <= 0x0d) {
-        sprintf(int_access_str, "key 0x%02x", right);
+        snprintf(int_access_str, sizeof(int_access_str), "key 0x%02x", right);
         return int_access_str;
     }
+
     if (right == 0x0e)
         return DesfireFreeStr;
 
@@ -2331,8 +2330,9 @@ const char *AccessRightShortStr[] = {
 };
 
 const char *GetDesfireAccessRightShortStr(uint8_t right) {
-    if (right > 0x0f)
+    if (right > 0x0F) {
         return DesfireNAStr;
+    }
 
     return AccessRightShortStr[right];
 }
@@ -2345,23 +2345,20 @@ void DesfireEncodeFileAcessMode(uint8_t *mode, uint8_t r, uint8_t w, uint8_t rw,
 void DesfireDecodeFileAcessMode(const uint8_t *mode, uint8_t *r, uint8_t *w, uint8_t *rw, uint8_t *ch) {
     // read
     if (r)
-        *r = (mode[1] >> 4) & 0x0f; // hi 2b
+        *r = (mode[1] >> 4) & 0x0F; // hi 2b
     // write
     if (w)
-        *w = mode[1] & 0x0f;
+        *w = mode[1] & 0x0F;
     // read/write
     if (rw)
-        *rw = (mode[0] >> 4) & 0x0f; // low 2b
+        *rw = (mode[0] >> 4) & 0x0F; // low 2b
     // change
     if (ch)
-        *ch = mode[0] & 0x0f;
+        *ch = mode[0] & 0x0F;
 }
 
 void DesfirePrintAccessRight(uint8_t *data) {
-    uint8_t r = 0;
-    uint8_t w = 0;
-    uint8_t rw = 0;
-    uint8_t ch = 0;
+    uint8_t r = 0, w = 0, rw = 0, ch = 0;
     DesfireDecodeFileAcessMode(data, &r, &w, &rw, &ch);
     PrintAndLogEx(SUCCESS, "read     : %s", GetDesfireAccessRightStr(r));
     PrintAndLogEx(SUCCESS, "write    : %s", GetDesfireAccessRightStr(w));

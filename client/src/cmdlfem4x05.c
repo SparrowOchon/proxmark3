@@ -692,24 +692,25 @@ int CmdEM4x05Dump(const char *Cmd) {
     } else {
     }
 
-    if (success == PM3_SUCCESS) { // all ok save dump to file
-        // saveFileEML will add .eml extension to filename
-        // saveFile (binary) passes in the .bin extension.
+    // all ok save dump to file
+    if (success == PM3_SUCCESS) {
+
         if (strcmp(filename, "") == 0) {
 
             if (card_type == EM_4369) {
-                sprintf(filename, "lf-4369-%08X-dump", BSWAP_32(data[1]));
+                snprintf(filename, sizeof(filename), "lf-4369-%08X-dump", BSWAP_32(data[1]));
             } else if (card_type == EM_4469) {
-                sprintf(filename, "lf-4469-%08X-dump", BSWAP_32(data[1]));
+                snprintf(filename, sizeof(filename), "lf-4469-%08X-dump", BSWAP_32(data[1]));
             } else {
-                sprintf(filename, "lf-4x05-%08X-dump", BSWAP_32(data[1]));
+                snprintf(filename, sizeof(filename), "lf-4x05-%08X-dump", BSWAP_32(data[1]));
             }
 
         }
         PrintAndLogEx(NORMAL, "");
-        saveFileJSON(filename, (card_type == EM_4369 || card_type == EM_4469) ? jsfEM4x69 : jsfEM4x05, (uint8_t *)data, 16 * sizeof(uint32_t), NULL);
-        saveFileEML(filename, (uint8_t *)data, 16 * sizeof(uint32_t), sizeof(uint32_t));
-        saveFile(filename, ".bin", data, sizeof(data));
+        if (card_type == EM_4369 || card_type == EM_4469)
+            pm3_save_dump(filename, (uint8_t *)data, sizeof(data), jsfEM4x69, 4);
+        else
+            pm3_save_dump(filename, (uint8_t *)data, sizeof(data), jsfEM4x05, 4);
     }
     PrintAndLogEx(NORMAL, "");
     return success;
@@ -871,7 +872,7 @@ int CmdEM4x05Wipe(const char *Cmd) {
         arg_lit0(NULL, "4205", "target chip type EM 4205"),
         arg_lit0(NULL, "4305", "target chip type EM 4305 (default)"),
         arg_lit0(NULL, "4369", "target chip type EM 4369"),
-        arg_lit0(NULL, "4369", "target chip type EM 4469"),
+        arg_lit0(NULL, "4469", "target chip type EM 4469"),
         arg_str0("p", "pwd", "<hex>", "optional - password, 4 bytes hex"),
         arg_param_end
     };
@@ -1681,13 +1682,13 @@ int CmdEM4x05Unlock(const char *Cmd) {
         if (tries >= 5 && n == 0 && soon != late) {
 
             if (soon > late) {
-                PrintAndLogEx(INFO, "Tried %d times, soon:%i late:%i        => " _CYAN_("adjust +1 us >> %.0lf us"), tries, soon, late, start);
                 start++;
                 end++;
+                PrintAndLogEx(INFO, "Tried %d times, soon:%i late:%i        => " _CYAN_("adjust +1 us >> %.0lf us"), tries, soon, late, start);
             } else {
-                PrintAndLogEx(INFO, "Tried %d times, soon:%i late:%i        => " _CYAN_("adjust -1 us >> %.0lf us"), tries, soon, late, start);
                 start--;
                 end--;
+                PrintAndLogEx(INFO, "Tried %d times, soon:%i late:%i        => " _CYAN_("adjust -1 us >> %.0lf us"), tries, soon, late, start);
             }
             tries = 0;
             soon = 0;
@@ -1739,7 +1740,7 @@ int CmdEM4x05Unlock(const char *Cmd) {
             if (my_auto) {
                 start += n;
                 PrintAndLogEx(INFO, "                                    => " _CYAN_("adjust +%.0lf us >> %.0lf us"), n, start);
-                n /= 2;
+                n = (int)(n / 2);
             } else {
                 soon++;
             }
@@ -1793,7 +1794,7 @@ int CmdEM4x05Unlock(const char *Cmd) {
                     end = start;
                     start -= n;
                     PrintAndLogEx(INFO, "                                    => " _CYAN_("adjust -%.0lf us >> %.0lf us"), n, start);
-                    n /= 2;
+                    n = (int)(n / 2);
                 } else {
                     late++;
                 }
@@ -1992,7 +1993,7 @@ int CmdEM4x05Sniff(const char *Cmd) {
     bool fwd = arg_get_lit(ctx, 2);
     CLIParserFree(ctx);
 
-    char cmdText[100];
+    const char *cmdText;
     char dataText[100];
     char blkAddr[4];
     char bits[80];
@@ -2047,7 +2048,7 @@ int CmdEM4x05Sniff(const char *Cmd) {
                     if ((CycleWidth > 300) || (CycleWidth < (ZeroWidth - 5))) { // to long or too short
                         eop = true;
                         bits[bitidx++] = '0';   // Append last zero from the last bit find
-                        cmdText[0] = 0;
+                        cmdText = "";
 
                         // EM4305 command lengths
                         // Login        0011 <pwd>          => 4 +     45 => 49
@@ -2073,53 +2074,53 @@ int CmdEM4x05Sniff(const char *Cmd) {
                         if ((strncmp(bits, "0011", 4) == 0) && (bitidx == 49)) {
                             haveData = true;
                             pwd = true;
-                            sprintf(cmdText, "Logon");
-                            sprintf(blkAddr, "   ");
+                            cmdText = "Logon";
+                            strncpy(blkAddr, "   ",  sizeof(blkAddr));
                             tmpValue = em4x05_Sniff_GetBlock(&bits[4], fwd);
-                            sprintf(dataText, "%08X", tmpValue);
+                            snprintf(dataText, sizeof(dataText), "%08X", tmpValue);
                         }
 
                         // write
                         if ((strncmp(bits, "0101", 4) == 0) && (bitidx == 56)) {
                             haveData = true;
-                            sprintf(cmdText, "Write");
+                            cmdText = "Write";
                             tmpValue = (bits[4] - '0') + ((bits[5] - '0') << 1) + ((bits[6] - '0') << 2)  + ((bits[7] - '0') << 3);
-                            sprintf(blkAddr, "%u", tmpValue);
+                            snprintf(blkAddr, sizeof(blkAddr), "%u", tmpValue);
                             if (tmpValue == 2) {
                                 pwd = true;
                             }
                             tmpValue = em4x05_Sniff_GetBlock(&bits[11], fwd);
-                            sprintf(dataText, "%08X", tmpValue);
+                            snprintf(dataText, sizeof(dataText), "%08X", tmpValue);
                         }
 
                         // read
                         if ((strncmp(bits, "1001", 4) == 0) && (bitidx == 11)) {
                             haveData = true;
                             pwd = false;
-                            sprintf(cmdText, "Read");
+                            cmdText = "Read";
                             tmpValue = (bits[4] - '0') + ((bits[5] - '0') << 1) + ((bits[6] - '0') << 2)  + ((bits[7] - '0') << 3);
-                            sprintf(blkAddr, "%u", tmpValue);
-                            sprintf(dataText, " ");
+                            snprintf(blkAddr, sizeof(blkAddr), "%u", tmpValue);
+                            strncpy(dataText, " ", sizeof(dataText));
                         }
 
                         // protect
                         if ((strncmp(bits, "1100", 4) == 0) && (bitidx == 49)) {
                             haveData = true;
                             pwd = false;
-                            sprintf(cmdText, "Protect");
-                            sprintf(blkAddr, " ");
+                            cmdText = "Protect";
+                            strncpy(blkAddr, " ",  sizeof(blkAddr));
                             tmpValue = em4x05_Sniff_GetBlock(&bits[11], fwd);
-                            sprintf(dataText, "%08X", tmpValue);
+                            snprintf(dataText, sizeof(dataText), "%08X", tmpValue);
                         }
 
                         // disable
                         if ((strncmp(bits, "1010", 4) == 0) && (bitidx == 49)) {
                             haveData = true;
                             pwd = false;
-                            sprintf(cmdText, "Disable");
-                            sprintf(blkAddr, " ");
+                            cmdText = "Disable";
+                            strncpy(blkAddr, " ",  sizeof(blkAddr));
                             tmpValue = em4x05_Sniff_GetBlock(&bits[11], fwd);
-                            sprintf(dataText, "%08X", tmpValue);
+                            snprintf(dataText, sizeof(dataText), "%08X", tmpValue);
                         }
 
                         //  bits[bitidx] = 0;

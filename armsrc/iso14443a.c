@@ -166,7 +166,7 @@ void printHf14aConfig(void) {
     Dbprintf("  [r] RATS override....... %s%s%s",
              (hf14aconfig.forcerats == 0) ? _GREEN_("std") "    ( follow standard )" : "",
              (hf14aconfig.forcerats == 1) ? _RED_("force") "  ( always do RATS )" : "",
-             (hf14aconfig.forcerats == 2) ? _RED_("skip") "   () always skip RATS )" : ""
+             (hf14aconfig.forcerats == 2) ? _RED_("skip") "   ( always skip RATS )" : ""
             );
 }
 
@@ -678,7 +678,7 @@ void RAMFUNC SniffIso14443a(uint8_t param) {
     uint8_t *data = dma->buf;
 
     // Setup and start DMA.
-    if (!FpgaSetupSscDma((uint8_t *) dma->buf, DMA_BUFFER_SIZE)) {
+    if (FpgaSetupSscDma((uint8_t *) dma->buf, DMA_BUFFER_SIZE) == false) {
         if (g_dbglevel > 1) Dbprintf("FpgaSetupSscDma failed. Exiting");
         return;
     }
@@ -730,7 +730,7 @@ void RAMFUNC SniffIso14443a(uint8_t param) {
         // Need two samples to feed Miller and Manchester-Decoder
         if (rx_samples & 0x01) {
 
-            if (!TagIsActive) {        // no need to try decoding reader data if the tag is sending
+            if (TagIsActive == false) {        // no need to try decoding reader data if the tag is sending
                 uint8_t readerdata = (previous_data & 0xF0) | (*data >> 4);
                 if (MillerDecoding(readerdata, (rx_samples - 1) * 4)) {
                     LED_C_ON();
@@ -757,7 +757,7 @@ void RAMFUNC SniffIso14443a(uint8_t param) {
             }
 
             // no need to try decoding tag data if the reader is sending - and we cannot afford the time
-            if (!ReaderIsActive) {
+            if (ReaderIsActive == false) {
                 uint8_t tagdata = (previous_data << 4) | (*data & 0x0F);
                 if (ManchesterDecoding(tagdata, 0, (rx_samples - 1) * 4)) {
                     LED_B_ON();
@@ -927,9 +927,13 @@ bool GetIso14443aCommandFromReader(uint8_t *received, uint8_t *par, int *len) {
     (void)b;
 
     uint8_t flip = 0;
-    uint16_t checker = 0;
+    uint16_t checker = 4000;
     for (;;) {
+
         WDT_HIT();
+
+        // ever 3 * 4000,  check if we got any data from client
+        // takes long time,  usually messes with simualtion
         if (flip == 3) {
             if (data_available())
                 return false;
@@ -937,14 +941,14 @@ bool GetIso14443aCommandFromReader(uint8_t *received, uint8_t *par, int *len) {
             flip = 0;
         }
 
-        if (checker >= 3000) {
+        // button press, takes a bit time, might mess with simualtion
+        if (checker-- == 0) {
             if (BUTTON_PRESS())
                 return false;
 
             flip++;
-            checker = 0;
+            checker = 4000;
         }
-        ++checker;
 
         if (AT91C_BASE_SSC->SSC_SR & (AT91C_SSC_RXRDY)) {
             b = (uint8_t)AT91C_BASE_SSC->SSC_RHR;
@@ -1818,7 +1822,7 @@ static void PrepareDelayedTransfer(uint16_t delay) {
 
     ts->buf[ts->max++] = 0x00;
 
-    for (uint16_t i = 0; i < ts->max; i++) {
+    for (uint32_t i = 0; i < ts->max; i++) {
         uint8_t bits_to_shift = ts->buf[i] & bitmask;
         ts->buf[i] = ts->buf[i] >> delay;
         ts->buf[i] = ts->buf[i] | (bits_shifted << (8 - delay));
@@ -2321,16 +2325,16 @@ void ReaderTransmit(uint8_t *frame, uint16_t len, uint32_t *timing) {
     ReaderTransmitBitsPar(frame, len * 8, par, timing);
 }
 
-static int ReaderReceiveOffset(uint8_t *receivedAnswer, uint16_t offset, uint8_t *par) {
+static uint16_t ReaderReceiveOffset(uint8_t *receivedAnswer, uint16_t offset, uint8_t *par) {
     if (!GetIso14443aAnswerFromTag(receivedAnswer, par, offset))
-        return false;
+        return 0;
     LogTrace(receivedAnswer, Demod.len, Demod.startTime * 16 - DELAY_AIR2ARM_AS_READER, Demod.endTime * 16 - DELAY_AIR2ARM_AS_READER, par, false);
     return Demod.len;
 }
 
-int ReaderReceive(uint8_t *receivedAnswer, uint8_t *par) {
+uint16_t ReaderReceive(uint8_t *receivedAnswer, uint8_t *par) {
     if (!GetIso14443aAnswerFromTag(receivedAnswer, par, 0))
-        return false;
+        return 0;
     LogTrace(receivedAnswer, Demod.len, Demod.startTime * 16 - DELAY_AIR2ARM_AS_READER, Demod.endTime * 16 - DELAY_AIR2ARM_AS_READER, par, false);
     return Demod.len;
 }
@@ -2441,8 +2445,10 @@ static void iso14a_set_ATS_times(const uint8_t *ats) {
 
 static int GetATQA(uint8_t *resp, uint8_t *resp_par, bool use_ecp, bool use_magsafe) {
 
-#define ECP_DELAY 15
+#define ECP_DELAY 10
+#define ECP_RETRY_TIMEOUT 100
 #define WUPA_RETRY_TIMEOUT 10    // 10ms
+
 
     // 0x26 - REQA
     // 0x52 - WAKE-UP
@@ -2454,15 +2460,25 @@ static int GetATQA(uint8_t *resp, uint8_t *resp_par, bool use_ecp, bool use_mags
         wupa[0] = MAGSAFE_CMD_WUPA_4;
     }
 
+    if (use_ecp) {
+        // In case a device was already selected, we send a S-BLOCK deselect to bring it into an idle state so it can be selected again
+        uint8_t deselect_cmd[] = {0xc2, 0xe0, 0xb4};
+        ReaderTransmit(deselect_cmd, sizeof(deselect_cmd), NULL);
+        // Read response if present
+        (void) ReaderReceive(resp, resp_par);
+    }
+
     uint32_t save_iso14a_timeout = iso14a_get_timeout();
     iso14a_set_timeout(1236 / 128 + 1);  // response to WUPA is expected at exactly 1236/fc. No need to wait longer.
 
+    bool first_try = true;
+    uint32_t retry_timeout = use_ecp ? ECP_RETRY_TIMEOUT : WUPA_RETRY_TIMEOUT;
     uint32_t start_time = GetTickCount();
     int len;
 
     // we may need several tries if we did send an unknown command or a wrong authentication before...
     do {
-        if (use_ecp) {
+        if (use_ecp && !first_try) {
             uint8_t ecp[] = { 0x6a, 0x02, 0xC8, 0x01, 0x00, 0x03, 0x00, 0x02, 0x79, 0x00, 0x00, 0x00, 0x00, 0xC2, 0xD8};
             ReaderTransmit(ecp, sizeof(ecp), NULL);
             SpinDelay(ECP_DELAY);
@@ -2476,12 +2492,13 @@ static int GetATQA(uint8_t *resp, uint8_t *resp_par, bool use_ecp, bool use_mags
             }
         }
 
-
         // Broadcast for a card, WUPA (0x52) will force response from all cards in the field
         ReaderTransmitBitsPar(wupa, 7, NULL, NULL);
         // Receive the ATQA
         len = ReaderReceive(resp, resp_par);
-    } while (len == 0 && GetTickCountDelta(start_time) <= WUPA_RETRY_TIMEOUT);
+
+        first_try = false;
+    } while (len == 0 && GetTickCountDelta(start_time) <= retry_timeout);
 
     iso14a_set_timeout(save_iso14a_timeout);
     return len;
@@ -2512,13 +2529,43 @@ int iso14443a_select_cardEx(uint8_t *uid_ptr, iso14a_card_select_t *p_card, uint
         p_card->ats_len = 0;
     }
 
-    if (!GetATQA(resp, resp_par, use_ecp, use_magsafe)) {
+    if (GetATQA(resp, resp_par, use_ecp, use_magsafe) == false) {
         return 0;
     }
 
     if (p_card) {
         p_card->atqa[0] = resp[0];
         p_card->atqa[1] = resp[1];
+    }
+
+    // 11RF005SH or 11RF005M, Read UID again
+    if (p_card && p_card->atqa[1] == 0x00) {
+
+        if ((p_card->atqa[0] == 0x03) || (p_card->atqa[0] == 0x05)) {
+
+            // Read real UID
+            uint8_t fudan_read[] = { 0x30, 0x01, 0x8B, 0xB9};
+            ReaderTransmit(fudan_read, sizeof(fudan_read), NULL);
+            if (!ReaderReceive(resp, resp_par)) {
+                Dbprintf("Card didn't answer to select all");
+                return 0;
+            }
+
+            memcpy(p_card->uid, resp, 4);
+
+            // select again?
+            if (GetATQA(resp, resp_par, false, false) == false) {
+                return 0;
+            }
+
+            if (GetATQA(resp, resp_par, false, false) == false) {
+                return 0;
+            }
+
+            p_card->sak = 0x0A;
+            p_card->uidlen = 4;
+            return 1;
+        }
     }
 
     if (anticollision) {
@@ -2578,7 +2625,7 @@ int iso14443a_select_cardEx(uint8_t *uid_ptr, iso14a_card_select_t *p_card, uint
                 }
 
                 // finally, add the last bits and BCC of the UID
-                for (uint16_t i = collision_answer_offset; i < Demod.len * 8; i++, uid_resp_bits++) {
+                for (uint32_t i = collision_answer_offset; i < Demod.len * 8; i++, uid_resp_bits++) {
                     uint16_t UIDbit = (resp[i / 8] >> (i % 8)) & 0x01;
                     uid_resp[uid_resp_bits / 8] |= UIDbit << (uid_resp_bits % 8);
                 }
@@ -2972,7 +3019,7 @@ void ReaderIso14443a(PacketCommandNG *c) {
             }
         } else {                    // want to send complete bytes only
             if ((param & ISO14A_TOPAZMODE)) {
-                uint16_t i = 0;
+                size_t i = 0;
                 ReaderTransmitBitsPar(&cmd[i++], 7, NULL, NULL);                        // first byte: 7 bits, no paritiy
                 while (i < len) {
                     ReaderTransmitBitsPar(&cmd[i++], 8, NULL, NULL);                    // following bytes: 8 bits, no paritiy

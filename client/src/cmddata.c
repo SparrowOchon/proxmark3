@@ -34,6 +34,7 @@
 #include "cliparser.h"
 #include "cmdlft55xx.h"          // print...
 #include "crypto/asn1utils.h"    // ASN1 decode / print
+#include "cmdflashmemspiffs.h"   // SPIFFS flash memory download
 
 uint8_t g_DemodBuffer[MAX_DEMOD_BUF_LEN];
 size_t g_DemodBufferLen = 0;
@@ -1509,10 +1510,10 @@ static int CmdRawDemod(const char *Cmd) {
     };
 
     //
-    size_t n = MIN(strlen(Cmd), 4);
-    char tmp[7];
+    char tmp[5];
+    size_t n = MIN(strlen(Cmd), sizeof(tmp) - 1);
     memset(tmp, 0, sizeof(tmp));
-    strncpy(tmp, Cmd, n);
+    strncpy(tmp, Cmd, sizeof(tmp) - 1);
 
     CLIExecWithReturn(ctx, tmp, argtable, false);
     bool ab = arg_get_lit(ctx, 1);
@@ -1730,17 +1731,17 @@ static uint8_t getByte(uint8_t bits_per_sample, BitstreamOut_t *b) {
 }
 
 int getSamples(uint32_t n, bool verbose) {
-    return getSamplesEx(0, n, verbose);
+    return getSamplesEx(0, n, verbose, false);
 }
 
-int getSamplesEx(uint32_t start, uint32_t end, bool verbose) {
+int getSamplesEx(uint32_t start, uint32_t end, bool verbose, bool ignore_lf_config) {
 
     if (end < start) {
         PrintAndLogEx(WARNING, "error, end (%u) is smaller than start (%u)", end, start);
         return PM3_EINVARG;
     }
 
-    //If we get all but the last byte in bigbuf,
+    // If we get all but the last byte in bigbuf,
     // we don't have to worry about remaining trash
     // in the last byte in case the bits-per-sample
     // does not line up on byte boundaries
@@ -1765,8 +1766,8 @@ int getSamplesEx(uint32_t start, uint32_t end, bool verbose) {
 
     uint8_t bits_per_sample = 8;
 
-    //Old devices without this feature would send 0 at arg[0]
-    if (response.oldarg[0] > 0) {
+    // Old devices without this feature would send 0 at arg[0]
+    if (response.oldarg[0] > 0 && (ignore_lf_config == false)) {
         sample_config *sc = (sample_config *) response.data.asBytes;
         if (verbose) PrintAndLogEx(INFO, "Samples @ " _YELLOW_("%d") " bits/smpl, decimation 1:%d ", sc->bits_per_sample, sc->decimation);
         bits_per_sample = sc->bits_per_sample;
@@ -1951,7 +1952,7 @@ int CmdTuneSamples(const char *Cmd) {
 
             // 1% over threshold and supposedly non-RDV4
             if ((approx_vdd > approx_vdd_other_max * 1.01) && (!IfPm3Rdv4Fw())) {
-                PrintAndLogEx(WARNING, "Contradicting measures seem to indicate you're running a " _YELLOW_("PM3_GENERIC firmware on a RDV4"));
+                PrintAndLogEx(WARNING, "Contradicting measures seem to indicate you're running a " _YELLOW_("PM3GENERIC firmware on a RDV4"));
                 PrintAndLogEx(WARNING, "False positives is possible but please check your setup");
             }
             // 1% below threshold and supposedly RDV4
@@ -1966,11 +1967,11 @@ int CmdTuneSamples(const char *Cmd) {
     memset(judgement, 0, sizeof(judgement));
     // LF evaluation
     if (package->peak_v < LF_UNUSABLE_V)
-        sprintf(judgement, _RED_("UNUSABLE"));
+        snprintf(judgement, sizeof(judgement), _RED_("UNUSABLE"));
     else if (package->peak_v < LF_MARGINAL_V)
-        sprintf(judgement, _YELLOW_("MARGINAL"));
+        snprintf(judgement, sizeof(judgement), _YELLOW_("MARGINAL"));
     else
-        sprintf(judgement, _GREEN_("OK"));
+        snprintf(judgement, sizeof(judgement), _GREEN_("OK"));
 
     PrintAndLogEx((package->peak_v < LF_UNUSABLE_V) ? WARNING : SUCCESS, "LF antenna is %s", judgement);
 
@@ -1987,11 +1988,11 @@ int CmdTuneSamples(const char *Cmd) {
         PrintAndLogEx(SUCCESS, "Approx. Q factor (*): %.1lf by peak voltage measurement", hfq);
     }
     if (package->v_hf < HF_UNUSABLE_V)
-        sprintf(judgement, _RED_("UNUSABLE"));
+        snprintf(judgement, sizeof(judgement), _RED_("UNUSABLE"));
     else if (package->v_hf < HF_MARGINAL_V)
-        sprintf(judgement, _YELLOW_("MARGINAL"));
+        snprintf(judgement, sizeof(judgement), _YELLOW_("MARGINAL"));
     else
-        sprintf(judgement, _GREEN_("OK"));
+        snprintf(judgement, sizeof(judgement), _GREEN_("OK"));
 
     PrintAndLogEx((package->v_hf < HF_UNUSABLE_V) ? WARNING : SUCCESS, "HF antenna is %s", judgement);
     PrintAndLogEx(NORMAL, "\n(*) Q factor must be measured without tag on the antenna");
@@ -2031,6 +2032,7 @@ static int CmdLoad(const char *Cmd) {
     void *argtable[] = {
         arg_param_begin,
         arg_str1("f", "file", "<fn>", "file to load"),
+        arg_lit0("n",  "no-fix",  "Load data from wile without any transformations"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -2038,6 +2040,9 @@ static int CmdLoad(const char *Cmd) {
     int fnlen = 0;
     char filename[FILE_PATH_SIZE] = {0};
     CLIParamStrToBuf(arg_get_str(ctx, 1), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
+
+    bool nofix = arg_get_lit(ctx, 2);
+
     CLIParserFree(ctx);
 
     char *path = NULL;
@@ -2068,12 +2073,14 @@ static int CmdLoad(const char *Cmd) {
 
     PrintAndLogEx(SUCCESS, "loaded " _YELLOW_("%zu") " samples", g_GraphTraceLen);
 
-    uint8_t bits[g_GraphTraceLen];
-    size_t size = getFromGraphBuf(bits);
+    if (nofix == false) {
+        uint8_t bits[g_GraphTraceLen];
+        size_t size = getFromGraphBuf(bits);
 
-    removeSignalOffset(bits, size);
-    setGraphBuf(bits, size);
-    computeSignalProperties(bits, size);
+        removeSignalOffset(bits, size);
+        setGraphBuf(bits, size);
+        computeSignalProperties(bits, size);
+    }
 
     setClockGrid(0, 0);
     g_DemodBufferLen = 0;
@@ -2234,7 +2241,7 @@ int CmdSave(const char *Cmd) {
 
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "data save",
-                  "Save trace from graph window , i.e. the GraphBuffer\n"
+                  "Save signal trace from graph window , i.e. the GraphBuffer\n"
                   "This is a text file with number -127 to 127.  With the option `w` you can save it as wave file\n"
                   "Filename should be without file extension",
                   "data save -f myfilename         -> save graph buffer to file\n"
@@ -2255,8 +2262,12 @@ int CmdSave(const char *Cmd) {
     char filename[FILE_PATH_SIZE] = {0};
     // CLIGetStrWithReturn(ctx, 2, (uint8_t *)filename, &fnlen);
     CLIParamStrToBuf(arg_get_str(ctx, 2), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
-
     CLIParserFree(ctx);
+
+    if (g_GraphTraceLen == 0) {
+        PrintAndLogEx(WARNING, "Graphbuffer is empty, nothing to save");
+        return PM3_SUCCESS;
+    }
 
     if (as_wave)
         return saveFileWAVE(filename, g_GraphBuffer, g_GraphTraceLen);
@@ -2881,6 +2892,292 @@ static int CmdAsn1Decoder(const char *Cmd) {
     return PM3_SUCCESS;
 }
 
+
+
+static int CmdDiff(const char *Cmd) {
+
+    CLIParserContext *ctx;
+    CLIParserInit(&ctx, "data diff",
+                  "Diff takes a multitude of input data and makes a binary compare.\n"
+                  "It accepts filenames (filesystem or RDV4 flashmem SPIFFS), emulator memory, magic gen1",
+                  "data diff -w 4 -a hf-mfu-01020304.bin -b hf-mfu-04030201.bin\n"
+                  "data diff -a fileA -b fileB\n"
+                  "data diff -a fileA --eb\n"
+//                    "data diff -a fileA --cb\n"
+                  "data diff --fa fileA -b fileB\n"
+                  "data diff --fa fileA --fb fileB\n"
+                  "data diff --ea --cb\n"
+                 );
+
+    void *argtable[] = {
+        arg_param_begin,
+        arg_str0("a",  NULL, "<fn>", "input file name A"),
+        arg_str0("b",  NULL, "<fn>", "input file name B"),
+//        arg_lit0(NULL, "cb", "magic gen1 <hf mf csave>"),
+        arg_lit0(NULL, "eb", "emulator memory <hf mf esave>"),
+        arg_str0(NULL, "fa", "<fn>", "input spiffs file A"),
+        arg_str0(NULL, "fb", "<fn>", "input spiffs file B"),
+        arg_int0("w",  NULL, "<4|8|16>", "Width of data output"),
+        arg_param_end
+    };
+    CLIExecWithReturn(ctx, Cmd, argtable, false);
+
+    int fnlenA = 0;
+    char filenameA[FILE_PATH_SIZE] = {0};
+    CLIParamStrToBuf(arg_get_str(ctx, 1), (uint8_t *)filenameA, FILE_PATH_SIZE, &fnlenA);
+
+    int fnlenB = 0;
+    char filenameB[FILE_PATH_SIZE] = {0};
+    CLIParamStrToBuf(arg_get_str(ctx, 2), (uint8_t *)filenameB, FILE_PATH_SIZE, &fnlenB);
+
+//    bool use_c = arg_get_lit(ctx, 3);
+    bool use_e = arg_get_lit(ctx, 3);
+
+    // SPIFFS filename A
+    int splenA = 0;
+    char spnameA[FILE_PATH_SIZE] = {0};
+    CLIParamStrToBuf(arg_get_str(ctx, 4), (uint8_t *)spnameA, FILE_PATH_SIZE, &splenA);
+
+    // SPIFFS filename B
+    int splenB = 0;
+    char spnameB[FILE_PATH_SIZE] = {0};
+    CLIParamStrToBuf(arg_get_str(ctx, 5), (uint8_t *)spnameB, FILE_PATH_SIZE, &splenB);
+
+    int width = arg_get_int_def(ctx, 6, 16);
+    CLIParserFree(ctx);
+
+    // sanity check
+    if (IfPm3Rdv4Fw() == false && (splenA > 0 || splenB > 0)) {
+        PrintAndLogEx(WARNING, "No RDV4 Flashmemory available");
+        return PM3_EINVARG;
+    }
+
+    if (splenA > 32) {
+        PrintAndLogEx(WARNING, "SPIFFS filname A length is large than 32 bytes, got %d", splenA);
+        return PM3_EINVARG;
+    }
+    if (splenB > 32) {
+        PrintAndLogEx(WARNING, "SPIFFS filname B length is large than 32 bytes, got %d", splenB);
+        return PM3_EINVARG;
+    }
+
+    //
+    if (width > 16 || width < 1) {
+        PrintAndLogEx(INFO, "Width out of range, using default 16 bytes width");
+        width = 16;
+    }
+
+    // if user supplied dump file,  time to load it
+    int res = PM3_SUCCESS;
+    uint8_t *inA = NULL, *inB = NULL;
+    size_t datalenA = 0, datalenB = 0;
+    // read file A
+    if (fnlenA) {
+        // read dump file
+        res = pm3_load_dump(filenameA, (void **)&inA, &datalenA, 2048);
+        if (res != PM3_SUCCESS) {
+            return res;
+        }
+    }
+
+    // read file B
+    if (fnlenB) {
+        // read dump file
+        res = pm3_load_dump(filenameB, (void **)&inB, &datalenB, 2048);
+        if (res != PM3_SUCCESS) {
+            return res;
+        }
+    }
+
+    // read spiffs file A
+    if (splenA) {
+        res = flashmem_spiffs_download(spnameA, splenA, (void **)&inA, &datalenA);
+        if (res != PM3_SUCCESS) {
+            return res;
+        }
+    }
+
+    // read spiffs file B
+    if (splenB) {
+        res = flashmem_spiffs_download(spnameB, splenB, (void **)&inB, &datalenB);
+        if (res != PM3_SUCCESS) {
+            return res;
+        }
+    }
+
+    // download emulator memory
+    if (use_e) {
+
+        uint8_t *d = calloc(4096, sizeof(uint8_t));
+        if (d == NULL) {
+            PrintAndLogEx(WARNING, "Fail, cannot allocate memory");
+            return PM3_EMALLOC;
+        }
+
+        PrintAndLogEx(INFO, "downloading from emulator memory");
+        if (GetFromDevice(BIG_BUF_EML, d, 4096, 0, NULL, 0, NULL, 2500, false) == false) {
+            PrintAndLogEx(WARNING, "Fail, transfer from device time-out");
+            free(inA);
+            free(inB);
+            free(d);
+            return PM3_ETIMEOUT;
+        }
+
+        if (fnlenA) {
+            datalenB = 4096;
+            inB = d;
+        } else {
+            datalenA = 4096;
+            inA = d;
+        }
+    }
+
+    // dump magic card memory
+    /*
+    if (use_c) {
+        PrintAndLogEx(WARNING, "not implemented yet, feel free to contribute!");
+        return PM3_ENOTIMPL;
+    }
+    */
+
+    size_t n = (datalenA > datalenB) ? datalenB : datalenA;
+    PrintAndLogEx(DEBUG, "data len:  %zu   A %zu  B %zu", n, datalenA, datalenB);
+
+    if (inA == NULL)
+        PrintAndLogEx(INFO, "inA null");
+
+    if (inB == NULL)
+        PrintAndLogEx(INFO, "inB null");
+
+    int hdr_sln = (width * 4) + 2;
+
+    char hdr0[200] = " #  | " _CYAN_("a");
+    memset(hdr0 + strlen(hdr0), ' ', hdr_sln - 2);
+    strcat(hdr0 + strlen(hdr0), "| " _CYAN_("b"));
+
+    char hdr1[200] = "----+";
+    memset(hdr1 + strlen(hdr1), '-', hdr_sln);
+    memset(hdr1 + strlen(hdr1), '+', 1);
+    memset(hdr1 + strlen(hdr1), '-', hdr_sln);
+
+    PrintAndLogEx(INFO, "");
+    PrintAndLogEx(INFO, hdr1);
+    PrintAndLogEx(INFO, hdr0);
+    PrintAndLogEx(INFO, hdr1);
+
+    char line[880] = {0};
+
+    // print data diff loop
+    int i;
+    for (i = 0; i < n;  i += width) {
+
+        memset(line, 0, sizeof(line));
+
+        int diff = memcmp(inA + i, inB + i, width);
+
+        // if ok,  just print
+        if (diff == 0) {
+            hex_to_buffer((uint8_t *)line, inA + i, width, sizeof(line), 0, 1, true);
+            ascii_to_buffer((uint8_t *)(line + strlen(line)), inA + i, width, width, 0);
+            strncat(line + strlen(line), " | ", sizeof(line) - strlen(line));
+            hex_to_buffer((uint8_t *)(line + strlen(line)), inB + i, width, sizeof(line), 0, 1, true);
+            ascii_to_buffer((uint8_t *)(line + strlen(line)), inB + i, width, width, 0);
+        } else {
+
+            char dlnA[240] = {0};
+            char dlnB[240] = {0};
+            char dlnAii[180] = {0};
+            char dlnBii[180] = {0};
+
+            memset(dlnA, 0, sizeof(dlnA));
+            memset(dlnB, 0, sizeof(dlnB));
+            memset(dlnAii, 0, sizeof(dlnAii));
+            memset(dlnBii, 0, sizeof(dlnBii));
+
+            // if diff,  time to find it
+            for (int j = i; j < (i + width); j++) {
+
+                char ca = inA[j];
+                char cb = inB[j];
+
+                int dlnALen = strlen(dlnA);
+                int dlnBLen = strlen(dlnB);
+                int dlnAiiLen = strlen(dlnAii);
+                int dlnBiiLen = strlen(dlnBii);
+
+                if (inA[j] != inB[j]) {
+
+                    // diff / add colors
+                    snprintf(dlnA + dlnALen, sizeof(dlnA) - dlnALen, _GREEN_("%02X "), inA[j]);
+                    snprintf(dlnB + dlnBLen, sizeof(dlnB) - dlnBLen, _RED_("%02X "), inB[j]);
+                    snprintf(dlnAii + dlnAiiLen, sizeof(dlnAii) - dlnAiiLen, _GREEN_("%c"), ((ca < 32) || (ca == 127)) ? '.' : ca);
+                    snprintf(dlnBii + dlnBiiLen, sizeof(dlnBii) - dlnBiiLen, _RED_("%c"), ((cb < 32) || (cb == 127)) ? '.' : cb);
+
+                } else {
+                    // normal
+                    snprintf(dlnA + dlnALen, sizeof(dlnA) - dlnALen, "%02X ", inA[j]);
+                    snprintf(dlnB + dlnBLen, sizeof(dlnB) - dlnBLen, "%02X ", inB[j]);
+                    snprintf(dlnAii + dlnAiiLen, sizeof(dlnAii) - dlnAiiLen, "%c", ((ca < 32) || (ca == 127)) ? '.' : ca);
+                    snprintf(dlnBii + dlnBiiLen, sizeof(dlnBii) - dlnBiiLen, "%c", ((cb < 32) || (cb == 127)) ? '.' : cb);
+                }
+            }
+            snprintf(line, sizeof(line), "%s%s | %s%s", dlnA, dlnAii, dlnB, dlnBii);
+        }
+        PrintAndLogEx(INFO, "%03X | %s", i, line);
+    }
+
+    // mod
+
+
+    // print different length
+    bool tallestA = (datalenA > datalenB);
+    if (tallestA) {
+        n = datalenA;
+    } else {
+        n = datalenB;
+    }
+
+    // print data diff loop
+    for (; i < n;  i += width) {
+
+        memset(line, 0, sizeof(line));
+
+        if (tallestA) {
+            hex_to_buffer((uint8_t *)line, inA + i, width, sizeof(line), 0, 1, true);
+            ascii_to_buffer((uint8_t *)(line + strlen(line)), inA + i, width, sizeof(line), 0);
+            strcat(line + strlen(line), " | ");
+            for (int j = 0; j < width; j++) {
+                strncat(line + strlen(line), "-- ", sizeof(line) - strlen(line));
+            }
+            for (int j = 0; j < width; j++) {
+                strncat(line + strlen(line), ".", sizeof(line) - strlen(line));
+            }
+        } else {
+
+            for (int j = 0; j < width; j++) {
+                strncat(line + strlen(line), "-- ", sizeof(line) - strlen(line));
+            }
+            for (int j = 0; j < width; j++) {
+                strncat(line + strlen(line), ".", sizeof(line) - strlen(line));
+            }
+            strncat(line + strlen(line), " | ", sizeof(line) - strlen(line));
+            hex_to_buffer((uint8_t *)(line + strlen(line)), inB + i, width, sizeof(line), 0, 1, true);
+            ascii_to_buffer((uint8_t *)(line + strlen(line)), inB + i, width, sizeof(line), 0);
+        }
+
+        PrintAndLogEx(INFO, "%03X | %s", i, line);
+    }
+
+    // footer
+    PrintAndLogEx(INFO, hdr1);
+    PrintAndLogEx(NORMAL, "");
+
+    free(inB);
+    free(inA);
+    return PM3_SUCCESS;
+}
+
+
 static command_t CommandTable[] = {
     {"help",            CmdHelp,                 AlwaysAvailable,  "This help"},
 
@@ -2915,10 +3212,11 @@ static command_t CommandTable[] = {
     {"getbitstream",    CmdGetBitStream,         AlwaysAvailable,  "Convert GraphBuffer's >=1 values to 1 and <1 to 0"},
 
     {"-----------",     CmdHelp,                 AlwaysAvailable, "------------------------- " _CYAN_("General") "-------------------------"},
-    {"asn1",            CmdAsn1Decoder,         AlwaysAvailable,  "asn1 decoder"},
+    {"asn1",            CmdAsn1Decoder,          AlwaysAvailable,  "asn1 decoder"},
     {"bin2hex",         Cmdbin2hex,              AlwaysAvailable,  "Converts binary to hexadecimal"},
     {"bitsamples",      CmdBitsamples,           IfPm3Present,     "Get raw samples as bitstring"},
     {"clear",           CmdBuffClear,            AlwaysAvailable,  "Clears bigbuf on deviceside and graph window"},
+    {"diff",            CmdDiff,                 AlwaysAvailable,  "diff of input files"},
     {"hexsamples",      CmdHexsamples,           IfPm3Present,     "Dump big buffer as hex bytes"},
     {"hex2bin",         Cmdhex2bin,              AlwaysAvailable,  "Converts hexadecimal to binary"},
     {"load",            CmdLoad,                 AlwaysAvailable,  "Load contents of file into graph window"},

@@ -162,7 +162,9 @@ void FpgaSetupSsc(uint16_t fpga_mode) {
 
     // 8, 16 or 32 bits per transfer, no loopback, MSB first, 1 transfer per sync
     // pulse, no output sync
-    if ((fpga_mode & FPGA_MAJOR_MODE_MASK) == FPGA_MAJOR_MODE_HF_READER && FpgaGetCurrent() == FPGA_BITSTREAM_HF) {
+    if (((fpga_mode & FPGA_MAJOR_MODE_MASK) == FPGA_MAJOR_MODE_HF_READER ||
+            (fpga_mode & FPGA_MAJOR_MODE_MASK) == FPGA_MAJOR_MODE_HF_FSK_READER) &&
+            (FpgaGetCurrent() == FPGA_BITSTREAM_HF || FpgaGetCurrent() == FPGA_BITSTREAM_HF_15)) {
         AT91C_BASE_SSC->SSC_RFMR = SSC_FRAME_MODE_BITS_IN_WORD(16) | AT91C_SSC_MSBF | SSC_FRAME_MODE_WORDS_PER_TRANSFER(0);
     } else {
         AT91C_BASE_SSC->SSC_RFMR = SSC_FRAME_MODE_BITS_IN_WORD(8) | AT91C_SSC_MSBF | SSC_FRAME_MODE_WORDS_PER_TRANSFER(0);
@@ -391,7 +393,7 @@ static int bitparse_find_section(int bitstream_version, char section_name, uint3
     while (numbytes < MAX_FPGA_BIT_STREAM_HEADER_SEARCH) {
         char current_name = get_from_fpga_stream(bitstream_version, compressed_fpga_stream, output_buffer);
         numbytes++;
-        uint32_t current_length = 0;
+        uint16_t current_length = 0;
         if (current_name < 'a' || current_name > 'e') {
             /* Strange section name, abort */
             break;
@@ -611,10 +613,12 @@ void switch_off(void) {
     if (g_dbglevel > 3) {
         Dbprintf("switch_off");
     }
+
     FpgaWriteConfWord(FPGA_MAJOR_MODE_OFF);
-    if (downloaded_bitstream == FPGA_BITSTREAM_HF) {
+    if (downloaded_bitstream == FPGA_BITSTREAM_HF || downloaded_bitstream == FPGA_BITSTREAM_HF_15) {
         FpgaDisableSscDma();
     }
+
     set_tracing(false);
     LEDsoff();
 }

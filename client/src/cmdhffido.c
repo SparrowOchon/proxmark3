@@ -137,22 +137,22 @@ static int CmdHFFidoRegister(const char *cmd) {
                   "challenge parameter (32b) and application parameter (32b).\n"
                   "The default config filename is  `fido2_defparams.json`\n"
                   "\n",
-                  "hf fido reg                 -> execute command with 2 parameters, filled 0x00\n"
-                  "hf fido reg --cp s0 --ap s1 -> execute command with plain parameters\n"
+                  "hf fido reg                   -> execute command with 2 parameters, filled 0x00\n"
+                  "hf fido reg --cp s0 --ap s1   -> execute command with plain parameters\n"
                   "hf fido reg --cpx 000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f --apx 000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f\n"
-                  "hf fido reg -f fido2-params -> execute command with custom config file\n"
+                  "hf fido reg -f fido2-params   -> execute command with custom config file\n"
                  );
 
     void *argtable[] = {
         arg_param_begin,
-        arg_lit0("a",  "apdu",  "show APDU requests and responses"),
-        arg_litn("v",  "verbose",  0, 2, "show technical data. vv - show full certificates data"),
-        arg_lit0("t",  "tlv",   "Show DER certificate contents in TLV representation"),
-        arg_str0("f",  "file",  "<fn>", "JSON input file name for parameters"),
-        arg_str0(NULL,  "cp",   "<ascii>", "challenge parameter (1..16 chars)"),
-        arg_str0(NULL,  "ap",   "<ascii>",  "application parameter (1..16 chars)"),
-        arg_str0(NULL,  "cpx",   "<hex>", "challenge parameter (32 bytes hex)"),
-        arg_str0(NULL,  "apx",   "<hex>",  "application parameter (32 bytes hex)"),
+        arg_lit0("a",  "apdu", "Show APDU requests and responses"),
+        arg_litn("v",  "verbose",  0, 2, "Verbose mode. vv - show full certificates data"),
+        arg_lit0("t",  "tlv",  "Show DER certificate contents in TLV representation"),
+        arg_str0("f",  "file", "<fn>",  "JSON input file name for parameters"),
+        arg_str0(NULL, "cp",   "<str>", "Challenge parameter (1..16 chars)"),
+        arg_str0(NULL, "ap",   "<str>", "Application parameter (1..16 chars)"),
+        arg_str0(NULL, "cpx",  "<hex>", "Challenge parameter (32 bytes hex)"),
+        arg_str0(NULL, "apx",  "<hex>", "Application parameter (32 bytes hex)"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, cmd, argtable, true);
@@ -372,11 +372,15 @@ static int CmdHFFidoRegister(const char *cmd) {
     PrintAndLogEx(INFO, "");
     PrintAndLogEx(INFO, "auth command: ");
     char command[500] = {0};
-    sprintf(command, "hf fido auth --kh %s", sprint_hex_inrow(&buf[67], keyHandleLen));
-    if (chlen)
-        sprintf(command + strlen(command), " --%s %s", cpplain ? "cp" : "cpx", cpplain ? (char *)cdata : sprint_hex_inrow(cdata, 32));
-    if (applen)
-        sprintf(command + strlen(command), " --%s %s", applain ? "cp" : "cpx", applain ? (char *)adata : sprint_hex_inrow(adata, 32));
+    snprintf(command, sizeof(command), "hf fido auth --kh %s", sprint_hex_inrow(&buf[67], keyHandleLen));
+    if (chlen) {
+        size_t command_len = strlen(command);
+        snprintf(command + command_len, sizeof(command) - command_len, " --%s %s", cpplain ? "cp" : "cpx", cpplain ? (char *)cdata : sprint_hex_inrow(cdata, 32));
+    }
+    if (applen) {
+        size_t command_len = strlen(command);
+        snprintf(command + command_len, sizeof(command) - command_len, " --%s %s", applain ? "cp" : "cpx", applain ? (char *)adata : sprint_hex_inrow(adata, 32));
+    }
     PrintAndLogEx(INFO, "%s", command);
 
     if (root) {
@@ -409,18 +413,18 @@ static int CmdHFFidoAuthenticate(const char *cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_lit0("a",  "apdu",      "show APDU reqests and responses"),
-        arg_lit0("v",  "verbose",   "show technical data"),
+        arg_lit0("a",  "apdu",      "Show APDU reqests and responses"),
+        arg_lit0("v",  "verbose",   "Verbose mode"),
         arg_rem("default mode:",    "dont-enforce-user-presence-and-sign"),
         arg_lit0("u",  "user",      "mode: enforce-user-presence-and-sign"),
         arg_lit0("c",  "check",     "mode: check-only"),
-        arg_str0("f",  "file",    "<fn>", "JSON input file name for parameters"),
-        arg_str0("k",  "key",    "<hex>", "public key to verify signature"),
-        arg_str0(NULL, "kh",     "<hex>",  "key handle (var 0..255b)"),
-        arg_str0(NULL, "cp",   "<ascii>", "challenge parameter (1..16 chars)"),
-        arg_str0(NULL, "ap",   "<ascii>",  "application parameter (1..16 chars)"),
-        arg_str0(NULL, "cpx",    "<hex>", "challenge parameter (32 bytes hex)"),
-        arg_str0(NULL, "apx",    "<hex>",  "application parameter (32 bytes hex)"),
+        arg_str0("f",  "file",  "<fn>",  "JSON file name for parameters"),
+        arg_str0("k",  "key",   "<hex>", "Public key to verify signature"),
+        arg_str0(NULL, "kh",    "<hex>", "Key handle (var 0..255b)"),
+        arg_str0(NULL, "cp",    "<str>", "Challenge parameter (1..16 chars)"),
+        arg_str0(NULL, "ap",    "<str>", "Application parameter (1..16 chars)"),
+        arg_str0(NULL, "cpx",   "<hex>", "Challenge parameter (32 bytes hex)"),
+        arg_str0(NULL, "apx",   "<hex>", "Application parameter (32 bytes hex)"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, cmd, argtable, true);
@@ -671,11 +675,11 @@ static int CmdHFFido2MakeCredential(const char *cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_lit0("a", "apdu", "show APDU reqests and responses"),
-        arg_litn("v", "verbose", 0, 2, "show technical data. vv - show full certificates data"),
-        arg_lit0("t", "tlv", "Show DER certificate contents in TLV representation"),
-        arg_lit0("c", "cbor", "show CBOR decoded data"),
-        arg_str0("f", "file", "<fn>", "parameter JSON file name"),
+        arg_lit0("a", "apdu", "Show APDU reqests and responses"),
+        arg_litn("v", "verbose", 0, 2, "Verbose mode. vv - show full certificates data"),
+        arg_lit0("t", "tlv",  "Show DER certificate contents in TLV representation"),
+        arg_lit0("c", "cbor", "Show CBOR decoded data"),
+        arg_str0("f", "file", "<fn>", "Parameter JSON file name"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, cmd, argtable, true);
@@ -790,11 +794,11 @@ static int CmdHFFido2GetAssertion(const char *cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_lit0("a", "apdu", "show APDU reqests and responses"),
-        arg_litn("v", "verbose", 0, 2, "show technical data. vv - show full certificates data"),
-        arg_lit0("c", "cbor", "show CBOR decoded data"),
-        arg_lit0("l", "list", "add CredentialId from json to allowList"),
-        arg_str0("f", "file", "<fn>", "parameter JSON file name"),
+        arg_lit0("a", "apdu", "Show APDU reqests and responses"),
+        arg_litn("v", "verbose", 0, 2, "Verbose mode. vv - show full certificates data"),
+        arg_lit0("c", "cbor", "Show CBOR decoded data"),
+        arg_lit0("l", "list", "Add CredentialId from json to allowList"),
+        arg_str0("f", "file", "<fn>", "Parameter JSON file name"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, cmd, argtable, true);

@@ -55,7 +55,7 @@ void ClearAuthData(void) {
 
 static int gs_ntag_i2c_state = 0;
 static int gs_mfuc_state = 0;
-static uint8_t gs_mfuc_authdata[3][16] = {0};
+static uint8_t gs_mfuc_authdata[3][16] = {{0}};
 static uint8_t *gs_mfuc_key = NULL;
 
 /**
@@ -181,9 +181,17 @@ int applyIso14443a(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize, bool i
             return PM3_SUCCESS;
         }
 
-        if (cmdsize > 10 && (memcmp(cmd, "\x6a\x02\xC8\x01\x00\x03\x00\x02\x79", 9) == 0)) {
-            snprintf(exp, size, "ECP");
-            return PM3_SUCCESS;
+        if (cmdsize >= 7 && cmd[0] == ECP_HEADER) {
+            // Second byte of ECP frame indicates its version
+            // Version 0x01 payload is 7 bytes long (including crc)
+            // Version 0x02 payload is 15 bytes long (including crc)
+            if (cmd[1] == 0x01 && cmdsize == 7) {
+                snprintf(exp, size, "ECP1");
+                return PM3_SUCCESS;
+            } else if (cmd[1] == 0x02 && cmdsize == 15) {
+                snprintf(exp, size, "ECP2");
+                return PM3_SUCCESS;
+            }
         }
 
         gs_ntag_i2c_state = 0;
@@ -315,7 +323,7 @@ int applyIso14443a(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize, bool i
 // buffer too small to print the full key,
 // so we give just a hint that one of the default keys was used
 //                        snprintf(exp, size, "AUTH-2 KEY: " _YELLOW_("%s"), sprint_hex(gs_mfuc_key, 16));
-                        snprintf(exp, size, "AUTH-2 KEY: " _YELLOW_("%02x%02x%02x%02x..."), gs_mfuc_key[0], gs_mfuc_key[1], gs_mfuc_key[2], gs_mfuc_key[3]);
+                        snprintf(exp, size, "AUTH-2 KEY: " _GREEN_("%02X%02X%02X%02X..."), gs_mfuc_key[0], gs_mfuc_key[1], gs_mfuc_key[2], gs_mfuc_key[3]);
                     } else {
                         snprintf(exp, size, "AUTH-2");
                     }
@@ -326,7 +334,7 @@ int applyIso14443a(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize, bool i
                 break;
             case MIFARE_ULEV1_AUTH:
                 if (cmdsize == 7)
-                    snprintf(exp, size, "PWD-AUTH KEY: " _YELLOW_("0x%02x%02x%02x%02x"), cmd[1], cmd[2], cmd[3], cmd[4]);
+                    snprintf(exp, size, "PWD-AUTH KEY: " _GREEN_("0x%02X%02X%02X%02X"), cmd[1], cmd[2], cmd[3], cmd[4]);
                 else
                     snprintf(exp, size, "PWD-AUTH");
                 break;
@@ -553,7 +561,11 @@ void annotateIso15693(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize) {
                 snprintf(exp, size, "LOCKBLOCK");
                 return;
             case ISO15693_READ_MULTI_BLOCK:
-                snprintf(exp, size, "READ_MULTI_BLOCK");
+                if (cmdsize == 6) {
+                    snprintf(exp, size, "READ_MULTI_BLOCK(%d-%d)", cmd[2], (cmd[2] + cmd[3]));
+                } else {
+                    snprintf(exp, size, "READ_MULTI_BLOCK(%d-%d)", cmd[10], (cmd[10] + cmd[11]));
+                }
                 return;
             case ISO15693_WRITE_MULTI_BLOCK:
                 snprintf(exp, size, "WRITE_MULTI_BLOCK");
@@ -1517,10 +1529,11 @@ static void mf_get_paritybinstr(char *s, uint32_t val, uint8_t par) {
     num_to_bytes(val, sizeof(uint32_t), foo);
     for (uint8_t i = 0; i < 4; i++) {
         if (oddparity8(foo[i]) != ((par >> (7 - (i & 0x0007))) & 0x01))
-            sprintf(s++, "1");
+            *(s++) = '1';
         else
-            sprintf(s++, "0");
+            *(s++) = '0';
     }
+    s[0] = '\0';
 }
 
 bool DecodeMifareData(uint8_t *cmd, uint8_t cmdsize, uint8_t *parity, bool isResponse, uint8_t *mfData, size_t *mfDataLen, const uint64_t *dicKeys, uint32_t dicKeysCount) {

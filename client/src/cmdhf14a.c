@@ -18,9 +18,9 @@
 #include "cmdhf14a.h"
 #include <ctype.h>
 #include <string.h>
-#include "cmdparser.h"    // command_t
-#include "commonutil.h"   // ARRAYLEN
-#include "comms.h"        // clearCommandBuffer
+#include "cmdparser.h"      // command_t
+#include "commonutil.h"     // ARRAYLEN
+#include "comms.h"          // clearCommandBuffer
 #include "cmdtrace.h"
 #include "cliparser.h"
 #include "cmdhfmf.h"
@@ -29,9 +29,9 @@
 #include "emv/emvcore.h"
 #include "ui.h"
 #include "crc16.h"
-#include "util_posix.h"  // msclock
+#include "util_posix.h"    // msclock
 #include "aidsearch.h"
-#include "cmdhf.h"       // handle HF plot
+#include "cmdhf.h"         // handle HF plot
 #include "cliparser.h"
 #include "protocols.h"     // definitions of ISO14A/7816 protocol, MAGIC_GEN_1A
 #include "iso7816/apduinfo.h"  // GetAPDUCodeDescription
@@ -189,6 +189,7 @@ static const hintAIDList_t hintAIDList[] = {
 
 // iso14a apdu input frame length
 static uint16_t gs_frame_len = 0;
+static uint8_t gs_frames_num = 0;
 static uint16_t atsFSC[] = {16, 24, 32, 40, 48, 64, 96, 128, 256};
 
 static int CmdHF14AList(const char *Cmd) {
@@ -399,13 +400,13 @@ int Hf14443_4aGetCardData(iso14a_card_select_t *card) {
 
     if (select_status == 3) {
         PrintAndLogEx(INFO, "E->Card doesn't support standard iso14443-3 anticollision");
-        PrintAndLogEx(SUCCESS, "\tATQA : %02x %02x", card->atqa[1], card->atqa[0]);
+        PrintAndLogEx(SUCCESS, "\tATQA : %02X %02X", card->atqa[1], card->atqa[0]);
         return 1;
     }
 
     PrintAndLogEx(SUCCESS, " UID: " _GREEN_("%s"), sprint_hex(card->uid, card->uidlen));
-    PrintAndLogEx(SUCCESS, "ATQA: %02x %02x", card->atqa[1], card->atqa[0]);
-    PrintAndLogEx(SUCCESS, " SAK: %02x [%" PRIu64 "]", card->sak, resp.oldarg[0]);
+    PrintAndLogEx(SUCCESS, "ATQA: %02X %02X", card->atqa[1], card->atqa[0]);
+    PrintAndLogEx(SUCCESS, " SAK: %02X [%" PRIu64 "]", card->sak, resp.oldarg[0]);
     if (card->ats_len < 3) { // a valid ATS consists of at least the length byte (TL) and 2 CRC bytes
         PrintAndLogEx(INFO, "E-> Error ATS length(%d) : %s", card->ats_len, sprint_hex(card->ats, card->ats_len));
         return 1;
@@ -510,7 +511,7 @@ static int CmdHF14AReader(const char *Cmd) {
             if (select_status == 3) {
                 if (!(silent && continuous)) {
                     PrintAndLogEx(INFO, "Card doesn't support standard iso14443-3 anticollision");
-                    PrintAndLogEx(SUCCESS, "ATQA: %02x %02x", card.atqa[1], card.atqa[0]);
+                    PrintAndLogEx(SUCCESS, "ATQA: %02X %02X", card.atqa[1], card.atqa[0]);
                 }
                 DropField();
                 res = PM3_ESOFT;
@@ -518,8 +519,8 @@ static int CmdHF14AReader(const char *Cmd) {
             }
             PrintAndLogEx(SUCCESS, " UID: " _GREEN_("%s"), sprint_hex(card.uid, card.uidlen));
             if (!(silent && continuous)) {
-                PrintAndLogEx(SUCCESS, "ATQA: " _GREEN_("%02x %02x"), card.atqa[1], card.atqa[0]);
-                PrintAndLogEx(SUCCESS, " SAK: " _GREEN_("%02x [%" PRIu64 "]"), card.sak, resp.oldarg[0]);
+                PrintAndLogEx(SUCCESS, "ATQA: " _GREEN_("%02X %02X"), card.atqa[1], card.atqa[0]);
+                PrintAndLogEx(SUCCESS, " SAK: " _GREEN_("%02X [%" PRIu64 "]"), card.sak, resp.oldarg[0]);
 
                 if (card.ats_len >= 3) { // a valid ATS consists of at least the length byte (TL) and 2 CRC bytes
                     if (card.ats_len == card.ats[0] + 2)
@@ -633,7 +634,8 @@ static int CmdHF14ACUIDs(const char *Cmd) {
         } else {
             char uid_string[20];
             for (uint16_t m = 0; m < card->uidlen; m++) {
-                sprintf(&uid_string[2 * m], "%02X", card->uid[m]);
+                int offset = 2 * m;
+                snprintf(uid_string + offset, sizeof(uid_string) - offset, "%02X", card->uid[m]);
             }
             PrintAndLogEx(SUCCESS, "%s", uid_string);
         }
@@ -796,14 +798,14 @@ int CmdHF14ASniff(const char *Cmd) {
 }
 
 int ExchangeRAW14a(uint8_t *datain, int datainlen, bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen, bool silentMode) {
-    static uint8_t responseNum = 0;
+
     uint16_t cmdc = 0;
     *dataoutlen = 0;
 
     if (activateField) {
         // select with no disconnect and set gs_frame_len
         int selres = SelectCard14443A_4(false, !silentMode, NULL);
-        responseNum = 0;
+        gs_frames_num = 0;
         if (selres != PM3_SUCCESS)
             return selres;
     }
@@ -811,8 +813,8 @@ int ExchangeRAW14a(uint8_t *datain, int datainlen, bool activateField, bool leav
     if (leaveSignalON)
         cmdc |= ISO14A_NO_DISCONNECT;
 
-    uint8_t data[PM3_CMD_DATA_SIZE] = { 0x0a | responseNum, 0x00};
-    responseNum ^= 1;
+    uint8_t data[PM3_CMD_DATA_SIZE] = { 0x0a | gs_frames_num, 0x00};
+    gs_frames_num ^= 1;
     memcpy(&data[2], datain, datainlen & 0xFFFF);
     SendCommandOLD(CMD_HF_ISO14443A_READER, ISO14A_RAW | ISO14A_APPEND_CRC | cmdc, (datainlen & 0xFFFF) + 2, 0, data, (datainlen & 0xFFFF) + 2);
 
@@ -838,7 +840,7 @@ int ExchangeRAW14a(uint8_t *datain, int datainlen, bool activateField, bool leav
         }
 
         if (recv[0] != data[0]) {
-            if (!silentMode) PrintAndLogEx(ERR, "iso14443-4 framing error. Card send %2x must be %2x", dataout[0], data[0]);
+            if (!silentMode) PrintAndLogEx(ERR, "iso14443-4 framing error. Card send %2x must be %2x", recv[0], data[0]);
             return 2;
         }
 
@@ -862,6 +864,7 @@ int SelectCard14443A_4(bool disconnect, bool verbose, iso14a_card_select_t *card
 
     // global vars should be prefixed with g_
     gs_frame_len = 0;
+    gs_frames_num = 0;
 
     if (card) {
         memset(card, 0, sizeof(iso14a_card_select_t));
@@ -1207,7 +1210,7 @@ static int CmdHF14AAPDU(const char *Cmd) {
         return res;
 
     PrintAndLogEx(SUCCESS, "<<< %s | %s", sprint_hex_inrow(data, datalen), sprint_ascii(data, datalen));
-    PrintAndLogEx(SUCCESS, "<<< status: %02x %02x - %s", data[datalen - 2], data[datalen - 1], GetAPDUCodeDescription(data[datalen - 2], data[datalen - 1]));
+    PrintAndLogEx(SUCCESS, "<<< status: %02X %02X - %s", data[datalen - 2], data[datalen - 1], GetAPDUCodeDescription(data[datalen - 2], data[datalen - 1]));
 
     // TLV decoder
     if (decodeTLV && datalen > 4) {
@@ -1375,11 +1378,12 @@ static int waitCmd(bool i_select, uint32_t timeout, bool verbose) {
             bool crc = check_crc(CRC_14443_A, data, len);
 
             char s[16];
-            sprintf(s,
-                    (crc) ? _GREEN_("%02X %02X") : _RED_("%02X %02X"),
-                    data[len - 2],
-                    data[len - 1]
-                   );
+            snprintf(s,
+                     sizeof(s),
+                     (crc) ? _GREEN_("%02X %02X") : _RED_("%02X %02X"),
+                     data[len - 2],
+                     data[len - 1]
+                    );
 
             PrintAndLogEx(SUCCESS, "%s[ %s ]",  sprint_hex(data, len - 2), s);
         } else {
@@ -1468,7 +1472,9 @@ typedef enum {
     MTPLUS = 8,
     MTULTRALIGHT = 16,
     HID_SEOS = 32,
-    MTOTHER = 64
+    MTOTHER = 64,
+    MTEMV = 128,
+    MTFUDAN = 256,
 } nxp_mifare_type_t;
 
 // Based on NXP AN10833 Rev 3.6 and NXP AN10834 Rev 4.1
@@ -1582,6 +1588,11 @@ static int detect_nxp_card(uint8_t sak, uint16_t atqa, uint64_t select_status) {
                         printTag("MIFARE Plus SE 1K");
                         type |= MTPLUS;
                     }
+
+                    if ((atqa & 0x0004) == 0x0004) {
+                        printTag("EMV");
+                        type |= MTEMV;
+                    }
                 }
 
                 printTag("NTAG 4xx");
@@ -1599,6 +1610,19 @@ static int detect_nxp_card(uint8_t sak, uint16_t atqa, uint64_t select_status) {
             printTag("NTAG 2xx");
             type |= MTULTRALIGHT;
         }
+    } else if ((sak & 0x0A) == 0x0A) {
+
+        if ((atqa & 0x0003) == 0x0003) {
+            // Uses Shanghai algo
+            printTag("FM11RF005SH (FUDAN Shanghai Metro)");
+            type |= MTFUDAN;
+        } else if ((atqa & 0x0005) == 0x0005) {
+            printTag("FM11RF005M (FUDAN MIFARE Classic clone)");
+            type |= MTFUDAN;
+        }
+    } else if ((sak & 0x53) == 0x53) {
+        printTag("FM11RF08SH (FUDAN)");
+        type |= MTFUDAN;
     }
 
     if (type == MTNONE) {
@@ -1636,6 +1660,78 @@ static void getTagLabel(uint8_t uid0, uint8_t uid1) {
     }
 }
 
+static void get_compact_tlv(uint8_t *d, uint8_t n) {
+    d++;
+    n--;
+
+    while (n > 0) {
+        uint8_t tag = NIBBLE_HIGH(d[0]);
+        uint8_t len = NIBBLE_LOW(d[0]);
+
+        switch (tag) {
+            case 1:
+                PrintAndLogEx(INFO, "    %1x%1x  " _YELLOW_("%s") "   Country code in (ISO 3166-1)", tag, len, sprint_hex_inrow(d + 1, len));
+                // iso3166 script in cmdlffdb.c is buggy,  Åland, Australia not showing.  getline issues
+                break;
+            case 2:
+                PrintAndLogEx(INFO, "    %1x%1x  " _YELLOW_("%s") "   Issuer identification number (ISO 7812-1)", tag, len, sprint_hex_inrow(d + 1, len));
+                break;
+            case 3:
+                PrintAndLogEx(INFO, "    %1x%1x  " _YELLOW_("%s") "   Card service data byte", tag, len, sprint_hex_inrow(d + 1, len));
+                PrintAndLogEx(INFO, "    %c.......    Application selection: by full DF name", (d[1] & 0x80) ? '1' : '0');
+                PrintAndLogEx(INFO, "    .%c......    Application selection: by partial DF name", (d[1] & 0x40) ? '1' : '0');
+                PrintAndLogEx(INFO, "    ..%c.....    BER-TLV data objects available in EF.DIR", (d[1] & 0x20) ? '1' : '0');
+                PrintAndLogEx(INFO, "    ...%c....    BER-TLV data objects available in EF.ATR", (d[1] & 0x10) ? '1' : '0');
+                PrintAndLogEx(INFO, "    ....%c...    EF.DIR and EF.ATR access services: by READ BINARY command", (d[1] & 0x08) ? '1' : '0');
+                PrintAndLogEx(INFO, "    .....%c..    EF.DIR and EF.ATR access services: by GET DATA command", (d[1] & 0x04) ? '1' : '0');
+                PrintAndLogEx(INFO, "    ......%c.    EF.DIR and EF.ATR access services: by GET RECORD(s) command", (d[1] & 0x02) ? '1' : '0');
+                PrintAndLogEx(INFO, "    .......%c    EF.DIR and EF.ATR access services: RFU", (d[1] & 0x01) ? '1' : '0');
+                break;
+            case 4:
+                PrintAndLogEx(INFO, "    %1x%1x  " _YELLOW_("%s") "   Initial access data", tag, len, sprint_hex_inrow(d + 1, len));
+                break;
+            case 5:
+                PrintAndLogEx(INFO, "    %1x%1x  " _YELLOW_("%s") "   Card issuer data", tag, len, sprint_hex_inrow(d + 1, len));
+                break;
+            case 6:
+                PrintAndLogEx(INFO, "    %1x%1x  " _YELLOW_("%s") "   Pre-issuing data", tag, len, sprint_hex_inrow(d + 1, len));
+                break;
+            case 7:
+                PrintAndLogEx(INFO, "    %1x%1x " _YELLOW_("%s") "   Card capabilities", tag, len, sprint_hex_inrow(d + 1, len));
+
+                PrintAndLogEx(INFO, "    " _YELLOW_("%02X") " - Selection methods", d[1]);
+                PrintAndLogEx(INFO, "    %c.......    DF selection by full DF name", (d[1] & 0x80) ? '1' : '0');
+                PrintAndLogEx(INFO, "    .%c......    DF selection by partial DF name", (d[1] & 0x40) ? '1' : '0');
+                PrintAndLogEx(INFO, "    ..%c.....    DF selection by path", (d[1] & 0x20) ? '1' : '0');
+                PrintAndLogEx(INFO, "    ...%c....    DF selection by file identifier", (d[1] & 0x10) ? '1' : '0');
+                PrintAndLogEx(INFO, "    ....%c...    Implicit DF selection", (d[1] & 0x08) ? '1' : '0');
+                PrintAndLogEx(INFO, "    .....%c..    Short EF identifier supported", (d[1] & 0x04) ? '1' : '0');
+                PrintAndLogEx(INFO, "    ......%c.    Record number supported", (d[1] & 0x02) ? '1' : '0');
+                PrintAndLogEx(INFO, "    .......%c    Record identifier supported", (d[1] & 0x01) ? '1' : '0');
+
+                if (len > 1) {
+                    PrintAndLogEx(INFO, "    " _YELLOW_("%02X") " - Data coding byte", d[2]);
+                }
+                if (len > 2) {
+                    PrintAndLogEx(INFO, "    " _YELLOW_("%02X") " - Command chaining, length fields and logical channels", d[3]);
+                }
+                break;
+            case 8:
+                PrintAndLogEx(INFO, "    %1x%1x ... " _YELLOW_("%s") "   Status indicator", tag, len, sprint_hex_inrow(d + 1, len));
+                break;
+            case 0xE:
+                PrintAndLogEx(INFO, "    %1x%1x ... " _YELLOW_("%s") "   Application identifier", tag, len, sprint_hex_inrow(d + 1, len));
+                break;
+        }
+
+        if (len > n)
+            break;
+
+        n -= (1 + len);
+        d += (1 + len);
+    }
+}
+
 int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_CONNECT | ISO14A_NO_DISCONNECT, 0, 0, NULL, 0);
@@ -1667,7 +1763,7 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
 
     if (select_status == 3) {
         PrintAndLogEx(INFO, "Card doesn't support standard iso14443-3 anticollision");
-        PrintAndLogEx(SUCCESS, "ATQA: %02x %02x", card.atqa[1], card.atqa[0]);
+        PrintAndLogEx(SUCCESS, "ATQA: %02X %02X", card.atqa[1], card.atqa[0]);
         DropField();
         return select_status;
     }
@@ -1677,8 +1773,8 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
     }
 
     PrintAndLogEx(SUCCESS, " UID: " _GREEN_("%s"), sprint_hex(card.uid, card.uidlen));
-    PrintAndLogEx(SUCCESS, "ATQA: " _GREEN_("%02x %02x"), card.atqa[1], card.atqa[0]);
-    PrintAndLogEx(SUCCESS, " SAK: " _GREEN_("%02x [%" PRIu64 "]"), card.sak, resp.oldarg[0]);
+    PrintAndLogEx(SUCCESS, "ATQA: " _GREEN_("%02X %02X"), card.atqa[1], card.atqa[0]);
+    PrintAndLogEx(SUCCESS, " SAK: " _GREEN_("%02X [%" PRIu64 "]"), card.sak, resp.oldarg[0]);
 
     bool isMifareClassic = true;
     bool isMifareDESFire = false;
@@ -1686,6 +1782,7 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
     bool isMifareUltralight = false;
     bool isST = false;
     bool isEMV = false;
+    bool isFUDAN = false;
     int nxptype = MTNONE;
 
     if (card.uidlen <= 4) {
@@ -1698,6 +1795,12 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
 
         if ((nxptype & MTOTHER) == MTOTHER)
             isMifareClassic = true;
+
+        if ((nxptype & MTFUDAN) == MTFUDAN)
+            isFUDAN = true;
+
+        if ((nxptype & MTEMV) == MTEMV)
+            isEMV = true;
 
     } else {
 
@@ -1718,6 +1821,12 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
 
                 if ((nxptype & MTOTHER) == MTOTHER)
                     isMifareClassic = true;
+
+                if ((nxptype & MTFUDAN) == MTFUDAN)
+                    isFUDAN = true;
+
+                if ((nxptype & MTEMV) == MTEMV)
+                    isEMV = true;
 
                 break;
             case 0x05: // Infineon
@@ -1786,12 +1895,14 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
                         break;
                     }
                     case 0x0A: {
-                        if (card.atqa[0] == 0x03)
-                            // Uses MIFARE Crypto-1 algo
-                            printTag("FM11RF005M (FUDAN MIFARE Classic clone)");
-                        else if (card.atqa[0] == 0x05)
+                        if (card.atqa[0] == 0x03) {
                             // Uses Shanghai algo
                             printTag("FM11RF005SH (FUDAN Shanghai Metro)");
+
+                        } else if (card.atqa[0] == 0x05) {
+                            // Uses MIFARE Crypto-1 algo
+                            printTag("FM11RF005M (FUDAN MIFARE Classic clone)");
+                        }
                         break;
                     }
                     case 0x20: {
@@ -1804,6 +1915,10 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
                     }
                     case 0x38: {
                         printTag("Nokia 6212 or 6131");
+                        break;
+                    }
+                    case 0x53: {
+                        printTag("FM11RF08SH (FUDAN)");
                         break;
                     }
                     case 0x98: {
@@ -1841,13 +1956,13 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
         }
 
         if (card.ats[0] != card.ats_len - 2) {
-            PrintAndLogEx(WARNING, "ATS may be corrupted. Length of ATS (%d bytes incl. 2 Bytes CRC) doesn't match TL", card.ats_len);
+            PrintAndLogEx(WARNING, _RED_("ATS may be corrupted.") " Length of ATS (%d bytes incl. 2 Bytes CRC) doesn't match TL", card.ats_len);
         }
 
-        PrintAndLogEx(SUCCESS, "ATS: " _YELLOW_("%s")"[ %02x %02x ]", sprint_hex(card.ats, card.ats_len - 2), card.ats[card.ats_len - 1], card.ats[card.ats_len]);
-        PrintAndLogEx(INFO, "     " _YELLOW_("%02x") "...............  TL    length is " _GREEN_("%d") " bytes", card.ats[0], card.ats[0]);
+        PrintAndLogEx(SUCCESS, "ATS: " _YELLOW_("%s")"[ %02X %02X ]", sprint_hex(card.ats, card.ats_len - 2), card.ats[card.ats_len - 1], card.ats[card.ats_len]);
+        PrintAndLogEx(INFO, "     " _YELLOW_("%02X") "...............  TL    length is " _GREEN_("%d") " bytes", card.ats[0], card.ats[0]);
 
-        if (card.ats[0] > 1) { // there is a format byte (T0)
+        if ((card.ats[0] > 1) && (card.ats_len > 3)) { // there is a format byte (T0)
             ta1 = (card.ats[1] & 0x10) == 0x10;
             tb1 = (card.ats[1] & 0x20) == 0x20;
             tc1 = (card.ats[1] & 0x40) == 0x40;
@@ -1864,7 +1979,7 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
                          );
         }
         int pos = 2;
-        if (ta1) {
+        if (ta1 && (card.ats_len > pos + 2)) {
             char dr[16], ds[16];
             dr[0] = ds[0] = '\0';
             if (card.ats[pos] & 0x10) strcat(ds, "2, ");
@@ -1886,7 +2001,7 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
             pos++;
         }
 
-        if (tb1) {
+        if (tb1 && (card.ats_len > pos + 2)) {
             uint32_t sfgi = card.ats[pos] & 0x0F;
             uint32_t fwi = card.ats[pos] >> 4;
 
@@ -1901,7 +2016,7 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
             pos++;
         }
 
-        if (tc1) {
+        if (tc1 && (card.ats_len > pos + 2)) {
             PrintAndLogEx(INFO, "                 " _YELLOW_("%02X") "...  TC1   NAD is%s supported, CID is%s supported",
                           card.ats[pos],
                           (card.ats[pos] & 0x01) ? "" : _RED_(" NOT"),
@@ -1911,7 +2026,7 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
         }
 
         // ATS - Historial bytes and identify based on it
-        if (card.ats[0] > pos && card.ats[0] <=  card.ats_len - 2) {
+        if ((card.ats[0] > pos) && (card.ats_len >= card.ats[0] + 2)) {
             char tip[60];
             tip[0] = '\0';
             if (card.ats[0] - pos >= 7) {
@@ -1968,7 +2083,7 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
             if (card.ats[pos] == 0xC1) {
                 PrintAndLogEx(INFO, "    %s%s", sprint_hex(card.ats + pos, calen), tip);
                 PrintAndLogEx(SUCCESS, "    C1.....................   Mifare or (multiple) virtual cards of various type");
-                PrintAndLogEx(SUCCESS, "       %02x..................   length is " _YELLOW_("%d") " bytes", card.ats[pos + 1], card.ats[pos + 1]);
+                PrintAndLogEx(SUCCESS, "       %02X..................   length is " _YELLOW_("%d") " bytes", card.ats[pos + 1], card.ats[pos + 1]);
                 switch (card.ats[pos + 2] & 0xf0) {
                     case 0x10:
                         PrintAndLogEx(SUCCESS, "          1x...............   MIFARE DESFire");
@@ -2032,10 +2147,12 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
                 }
             } else {
 
-                if (card.ats[pos] == 0x80)
-                    PrintAndLogEx(SUCCESS, "   %s  (compact TLV data object)", sprint_hex_inrow(card.ats + pos, calen));
-                else
-                    PrintAndLogEx(SUCCESS, "   %s", sprint_hex_inrow(card.ats + pos, calen));
+                if (card.ats[pos] == 0x80 || card.ats[pos] == 0x00) {
+                    PrintAndLogEx(SUCCESS, "  %s  (compact TLV data object)", sprint_hex_inrow(&card.ats[pos], calen));
+                    get_compact_tlv(card.ats + pos, calen);
+                } else {
+                    PrintAndLogEx(SUCCESS, "  %s", sprint_hex_inrow(card.ats + pos, calen));
+                }
 
                 PrintAndLogEx(NORMAL, "");
             }
@@ -2183,6 +2300,21 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search) {
     if (isEMV)
         PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`emv search -s`"));
 
+    if (isFUDAN) {
+        PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`hf fudan dump`"));
+        /*
+        PrintAndLogEx(HINT, "  hf 14a raw -a -b 7 -k 26");
+        PrintAndLogEx(HINT, "  hf 14a raw -k -c 3000");
+        PrintAndLogEx(HINT, "  hf 14a raw -k -c 3001");
+        PrintAndLogEx(HINT, "  hf 14a raw -k -c 3002");
+        PrintAndLogEx(HINT, "  hf 14a raw -k -c 3003");
+        PrintAndLogEx(HINT, "  hf 14a raw -k -c 3004");
+        PrintAndLogEx(HINT, "  hf 14a raw -k -c 3005");
+        PrintAndLogEx(HINT, "  hf 14a raw -k -c 3006");
+        PrintAndLogEx(HINT, "  hf 14a raw -c 3007");
+        */
+    }
+
     PrintAndLogEx(NORMAL, "");
     DropField();
     return select_status;
@@ -2319,13 +2451,15 @@ static int CmdHf14AFindapdu(const char *Cmd) {
     param_gethex_to_eol("00a404000aa000000440000101000100", 0, aSELECT_AID, sizeof(aSELECT_AID), &aSELECT_AID_n);
     int res = ExchangeAPDU14a(aSELECT_AID, aSELECT_AID_n, true, false, response, sizeof(response), &response_n);
     if (res != PM3_SUCCESS) {
-        PrintAndLogEx(FAILED, "Tag did not respond to a test APDU (select file command). Aborting");
+        PrintAndLogEx(FAILED, "Tag did not respond to a test APDU (select file command). Aborting...");
         return res;
     }
-    PrintAndLogEx(SUCCESS, "Got response. Starting the APDU finder [ CLA " _GREEN_("%02X") " INS " _GREEN_("%02X") " P1 " _GREEN_("%02X") " P2 " _GREEN_("%02X") " ]", cla, ins, p1, p2);
-    PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " to exit");
 
-    bool inc_p1 = true;
+    PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " to exit");
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(SUCCESS, "Starting the APDU finder [ CLA " _GREEN_("%02X") " INS " _GREEN_("%02X") " P1 " _GREEN_("%02X") " P2 " _GREEN_("%02X") " ]", cla, ins, p1, p2);
+
+    bool inc_p1 = false;
     bool skip_ins = false;
     uint64_t all_sw[256][256] = { { 0 } };
     uint64_t sw_occurrences = 0;
@@ -2379,11 +2513,20 @@ retry_ins:
                         if (sw == 0x9000) {
                             log_level = SUCCESS;
                         }
-                        PrintAndLogEx(log_level, "Got response for APDU \"%s\": %04X (%s)", sprint_hex_inrow(command, command_n + i),
-                                      sw, GetAPDUCodeDescription(sw >> 8, sw & 0xff));
-                        if (response_n > 2) {
-                            PrintAndLogEx(SUCCESS, "Response data is: %s | %s", sprint_hex_inrow(response, response_n - 2),
-                                          sprint_ascii(response, response_n - 2));
+
+                        if (verbose == true || sw != 0x6e00) {
+                            PrintAndLogEx(log_level, "Got response for APDU \"%s\": %04X (%s)",
+                                          sprint_hex_inrow(command, command_n + i),
+                                          sw,
+                                          GetAPDUCodeDescription(sw >> 8, sw & 0xff)
+                                         );
+
+                            if (response_n > 2) {
+                                PrintAndLogEx(SUCCESS, "Response data is: %s | %s",
+                                              sprint_hex_inrow(response, response_n - 2),
+                                              sprint_ascii(response, response_n - 2)
+                                             );
+                            }
                         }
                     }
                 }
@@ -2567,6 +2710,7 @@ int CmdHF14ANdefRead(const char *Cmd) {
         DropField();
         return PM3_ESOFT;
     }
+
     uint16_t ndef_size = (response[0] << 8) + response[1];
     uint16_t offset = 2;
     uint8_t *ndef_file = calloc(ndef_size, sizeof(uint8_t));
@@ -2575,6 +2719,14 @@ int CmdHF14ANdefRead(const char *Cmd) {
         DropField();
         return PM3_EMALLOC;
     }
+
+    if (ndef_size + offset > 0xFFFF) {
+        PrintAndLogEx(ERR, "NDEF size abnormally large in CmdHF14ANdef(). Aborting...\n");
+        free(ndef_file);
+        DropField();
+        return PM3_EOVFLOW;
+    }
+
     for (uint16_t i = offset; i < ndef_size + offset; i += max_rapdu_size) {
         uint16_t segment_size = max_rapdu_size < ndef_size + offset - i ? max_rapdu_size : ndef_size + offset - i;
         keep_field_on = i < ndef_size + offset - max_rapdu_size;
@@ -2583,12 +2735,14 @@ int CmdHF14ANdefRead(const char *Cmd) {
         aREAD_NDEF[2] = i >> 8;
         aREAD_NDEF[3] = i & 0xFF;
         aREAD_NDEF[4] = segment_size;
+
         res = ExchangeAPDU14a(aREAD_NDEF, aREAD_NDEF_n + 1, activate_field, keep_field_on, response, sizeof(response), &resplen);
         if (res != PM3_SUCCESS) {
             DropField();
             free(ndef_file);
             return res;
         }
+
         sw = get_sw(response, resplen);
         if (sw != 0x9000) {
             PrintAndLogEx(ERR, "reading NDEF file failed (%04x - %s).", sw, GetAPDUCodeDescription(sw >> 8, sw & 0xff));
@@ -2596,17 +2750,21 @@ int CmdHF14ANdefRead(const char *Cmd) {
             free(ndef_file);
             return PM3_ESOFT;
         }
+
         if (resplen != segment_size + 2) {
             PrintAndLogEx(ERR, "reading NDEF file failed, expected %i bytes, got %i bytes.", segment_size, resplen - 2);
             DropField();
             free(ndef_file);
             return PM3_ESOFT;
         }
+
         memcpy(ndef_file + (i - offset), response, segment_size);
     }
+
     if (fnlen != 0) {
         saveFile(filename, ".bin", ndef_file, ndef_size);
     }
+
     NDEFRecordsDecodeAndPrint(ndef_file, ndef_size);
     free(ndef_file);
     return PM3_SUCCESS;

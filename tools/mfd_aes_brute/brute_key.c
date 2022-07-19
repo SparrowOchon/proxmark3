@@ -22,13 +22,17 @@
 // makes it ~14% slower
 //#define SPINNER
 
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <limits.h>
+#include <string.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
-#include <string.h>
+
 
 uint32_t seed = 0;
 
@@ -61,19 +65,19 @@ static int decrypt(uint8_t ciphertext[], int ciphertext_len, uint8_t key[], uint
     int len;
     int plaintext_len;
 
-    if(!(ctx = EVP_CIPHER_CTX_new()))
+    if (!(ctx = EVP_CIPHER_CTX_new()))
         handleErrors();
 
-    if(1 != EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key, iv))
+    if (1 != EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key, iv))
         handleErrors();
 
     EVP_CIPHER_CTX_set_padding(ctx, 0);
 
-    if(1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len))
+    if (1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len))
         handleErrors();
     plaintext_len = len;
 
-    if(1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len))
+    if (1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len))
         handleErrors();
     plaintext_len += len;
 
@@ -87,7 +91,7 @@ static int hexstr_to_byte_array(char hexstr[], uint8_t bytes[], size_t byte_len)
     if (hexstr_len % 16) {
         return 1;
     }
-    if (byte_len < hexstr_len/2) {
+    if (byte_len < hexstr_len / 2) {
         return 2;
     }
     char *pos = &hexstr[0];
@@ -98,7 +102,7 @@ static int hexstr_to_byte_array(char hexstr[], uint8_t bytes[], size_t byte_len)
     return 0;
 }
 
-int main (int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
 
     uint8_t iv[16] = {0x00};
     uint8_t key[16] = {0x00};
@@ -107,20 +111,20 @@ int main (int argc, char* argv[]) {
     uint8_t tag_challenge[16]  = {0x00};
     uint8_t lock_challenge[32] = {0x00};
 
-    int timestamp = atoi(argv[1]);
+    uint64_t timestamp = atoi(argv[1]);
 
     if (argc != 4) {
         printf("\nusage: %s <unix timestamp> <16 byte tag challenge> <32 byte lock challenge>\n\n", argv[0]);
         return 1;
     }
 
-    if(hexstr_to_byte_array(argv[2], tag_challenge, sizeof(tag_challenge)))
+    if (hexstr_to_byte_array(argv[2], tag_challenge, sizeof(tag_challenge)))
         return 2;
 
-    if(hexstr_to_byte_array(argv[3], lock_challenge, sizeof(lock_challenge)))
+    if (hexstr_to_byte_array(argv[3], lock_challenge, sizeof(lock_challenge)))
         return 3;
 
-    int start_time = time(NULL);
+    uint64_t start_time = time(NULL);
 
     for (; timestamp < start_time; timestamp++) {
 
@@ -149,7 +153,7 @@ int main (int argc, char* argv[]) {
         if (dec_tag[15] != dec_rdr[30]) continue;
 
 
-        printf("\btimestamp: %i\nkey: ", timestamp);
+        printf("\btimestamp: %" PRIu64 "\nkey: ", timestamp);
         for (int i = 0; i < 16; i++) {
             printf("%02x", key[i]);
         }

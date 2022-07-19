@@ -78,16 +78,18 @@ void Set_t55xx_Config(t55xx_conf_block_t conf) {
 static int CmdHelp(const char *Cmd);
 
 static void arg_add_t55xx_downloadlink(void *at[], uint8_t *idx, uint8_t show, uint8_t dl_mode_def) {
+    const size_t r_count = 56;
+    const size_t r_len = r_count * sizeof(uint8_t);
 
-    char *r0 = (char *)calloc(56, sizeof(uint8_t));
-    char *r1 = (char *)calloc(56, sizeof(uint8_t));
-    char *r2 = (char *)calloc(56, sizeof(uint8_t));
-    char *r3 = (char *)calloc(56, sizeof(uint8_t));
+    char *r0 = (char *)calloc(r_count, sizeof(uint8_t));
+    char *r1 = (char *)calloc(r_count, sizeof(uint8_t));
+    char *r2 = (char *)calloc(r_count, sizeof(uint8_t));
+    char *r3 = (char *)calloc(r_count, sizeof(uint8_t));
 
-    sprintf(r0, "downlink - fixed bit length %s", (dl_mode_def == 0) ? "(detected def)" : "");
-    sprintf(r1, "downlink - long leading reference %s", (dl_mode_def == 1) ? "(detected def)" : "");
-    sprintf(r2, "downlink - leading zero %s", (dl_mode_def == 2) ? "(detected def)" : "");
-    sprintf(r3, "downlink - 1 of 4 coding reference %s", (dl_mode_def == 3) ? "(detected def)" : "");
+    snprintf(r0, r_len, "downlink - fixed bit length %s", (dl_mode_def == 0) ? "(detected def)" : "");
+    snprintf(r1, r_len, "downlink - long leading reference %s", (dl_mode_def == 1) ? "(detected def)" : "");
+    snprintf(r2, r_len, "downlink - leading zero %s", (dl_mode_def == 2) ? "(detected def)" : "");
+    snprintf(r3, r_len, "downlink - 1 of 4 coding reference %s", (dl_mode_def == 3) ? "(detected def)" : "");
 
     uint8_t n = *idx;
     at[n++] = arg_lit0(NULL, "r0", r0);
@@ -96,8 +98,8 @@ static void arg_add_t55xx_downloadlink(void *at[], uint8_t *idx, uint8_t show, u
     at[n++] = arg_lit0(NULL, "r3", r3);
 
     if (show == T55XX_DLMODE_ALL) {
-        char *r4 = (char *)calloc(56, sizeof(uint8_t));
-        sprintf(r4, "try all downlink modes %s", (dl_mode_def == 4) ? "(def)" : "");
+        char *r4 = (char *)calloc(r_count, sizeof(uint8_t));
+        snprintf(r4, r_len, "try all downlink modes %s", (dl_mode_def == 4) ? "(def)" : "");
         at[n++] = arg_lit0(NULL, "all", r4);
     }
     at[n++] = arg_param_end;
@@ -122,11 +124,14 @@ static int CmdT55xxCloneHelp(const char *Cmd) {
     PrintAndLogEx(NORMAL, _GREEN_("lf em 410x clone"));
 // todo:  implement restore
 //    PrintAndLogEx(NORMAL, _GREEN_("lf em 4x05 write"));
-//    PrintAndLogEx(NORMAL, _GREEN_("lf em 4x50 write"));
+//    PrintAndLogEx(NORMAL, _GREEN_("lf em 4x50 restore"));
     PrintAndLogEx(NORMAL, _GREEN_("lf fdxb clone"));
     PrintAndLogEx(NORMAL, _GREEN_("lf gallagher clone"));
     PrintAndLogEx(NORMAL, _GREEN_("lf gproxii clone"));
     PrintAndLogEx(NORMAL, _GREEN_("lf hid clone"));
+// todo:  implement restore
+//    PrintAndLogEx(NORMAL, _GREEN_("lf hitag clone"));
+    PrintAndLogEx(NORMAL, _GREEN_("lf idteck clone"));
     PrintAndLogEx(NORMAL, _GREEN_("lf indala clone"));
     PrintAndLogEx(NORMAL, _GREEN_("lf io clone"));
     PrintAndLogEx(NORMAL, _GREEN_("lf jablotron clone"));
@@ -296,7 +301,7 @@ bool t55xxAcquireAndCompareBlock0(bool usepwd, uint32_t password, uint32_t known
             continue;
         }
 
-        for (uint16_t i = 0; i < g_DemodBufferLen - 32; i++) {
+        for (size_t i = 0; i < g_DemodBufferLen - 32; i++) {
             uint32_t tmp = PackBits(i, 32, g_DemodBuffer);
             if (tmp == known_block0) {
                 config.offset = i;
@@ -958,7 +963,7 @@ static int CmdT55xxDetect(const char *Cmd) {
     if (use_gb == false) {
 
         char wakecmd[20] = { 0x00 };
-        sprintf(wakecmd, "-p %08" PRIx64, password);
+        snprintf(wakecmd, sizeof(wakecmd), "-p %08" PRIx64, password);
 
         bool usewake = false;
         bool try_with_pwd = false;
@@ -2356,43 +2361,17 @@ static int CmdT55xxRestore(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    size_t dlen = 0;
-    void *dump = NULL;
-    DumpFileType_t dftype = getfiletype(filename);
-    switch (dftype) {
-        case BIN: {
-            res = loadFile_safe(filename, ".bin", (void **)&dump, &dlen);
-            break;
-        }
-        case EML: {
-            res = loadFileEML_safe(filename, (void **)&dump, &dlen);
-            break;
-        }
-        case JSON: {
-            dump = calloc(T55x7_BLOCK_COUNT * 4, sizeof(uint8_t));
-            if (dump == NULL) {
-                PrintAndLogEx(WARNING, "Fail, cannot allocate memory");
-                return PM3_EMALLOC;
-            }
-            res = loadFileJSON(filename, dump, T55x7_BLOCK_COUNT * 4, &dlen, NULL);
-            break;
-        }
-        case DICTIONARY: {
-            PrintAndLogEx(ERR, "Error: Only BIN/EML/JSON formats allowed");
-            free(dump);
-            return PM3_EINVARG;
-        }
-    }
-
-    //sanity checks of file processing
+    // read dump file
+    uint8_t *dump = NULL;
+    size_t bytes_read = 0;
+    res = pm3_load_dump(filename, (void **)&dump, &bytes_read, (T55x7_BLOCK_COUNT * 4));
     if (res != PM3_SUCCESS) {
-        free(dump);
         return res;
     }
 
-    if (dlen != T55x7_BLOCK_COUNT * 4) {
+    if (bytes_read != (T55x7_BLOCK_COUNT * 4)) {
         free(dump);
-        PrintAndLogEx(FAILED, "wrong length of dump file. Expected 48 bytes, got %zu", dlen);
+        PrintAndLogEx(FAILED, "wrong length of dump file. Expected 48 bytes, got %zu", bytes_read);
         return PM3_EFILE;
     }
 
@@ -2404,8 +2383,9 @@ static int CmdT55xxRestore(const char *Cmd) {
     char wcmd[100];
     char pwdopt [14] = {0}; // p XXXXXXXX
 
-    if (usepwd)
+    if (usepwd) {
         snprintf(pwdopt, sizeof(pwdopt), "-p %08X", password);
+    }
 
     uint32_t *data = (uint32_t *) dump;
     uint8_t idx;
@@ -2420,7 +2400,7 @@ static int CmdT55xxRestore(const char *Cmd) {
     //    write blocks 1..3 page 1
     //    update downlink mode (if needed) and write b 0
     downlink_mode = 0;
-    if ((((data[11] >> 28) & 0xf) == 6) || (((data[11] >> 28) & 0xf) == 9))
+    if ((((data[11] >> 28) & 0xF) == 6) || (((data[11] >> 28) & 0xF) == 9))
         downlink_mode = (data[11] >> 10) & 3;
 
     // write out blocks 1-7 page 0
@@ -2574,7 +2554,7 @@ char *GetPskCfStr(uint32_t id, bool q5) {
 }
 
 char *GetBitRateStr(uint32_t id, bool xmode) {
-    static char buf[25];
+    static char buf[35];
 
     char *retStr = buf;
     if (xmode) { //xmode bitrate calc is same as em4x05 calc
@@ -4032,7 +4012,7 @@ static int CmdT55xxSniff(const char *Cmd) {
     size_t idx = 0;
     uint32_t usedPassword, blockData;
     int pulseSamples = 0, pulseIdx = 0;
-    char modeText[100];
+    const char *modeText;
     char pwdText[100];
     char dataText[100];
     int pulseBuffer[80] = { 0 }; // max should be 73 +/- - Holds Pulse widths
@@ -4047,8 +4027,8 @@ static int CmdT55xxSniff(const char *Cmd) {
     // Headings
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, _CYAN_("T55xx command detection"));
-    PrintAndLogEx(SUCCESS, "Downlink mode         | password |   Data   | blk | page |  0  |  1  | raw");
-    PrintAndLogEx(SUCCESS, "----------------------+----------+----------+-----+------+-----+-----+-------------------------------------------------------------------------------");
+    PrintAndLogEx(SUCCESS, "Downlink mode           |  password  |   Data   | blk | page |  0  |  1  | raw");
+    PrintAndLogEx(SUCCESS, "------------------------+------------+----------+-----+------+-----+-----+-------------------------------------------------------------------------------");
 
     idx = 0;
     // loop though sample buffer
@@ -4058,9 +4038,9 @@ static int CmdT55xxSniff(const char *Cmd) {
         int maxWidth = 0;
         data[0] = 0;
         bool have_data = false;
-        sprintf(modeText, "Default");
-        sprintf(pwdText, " ");
-        sprintf(dataText, " ");
+        modeText = "Default";
+        strncpy(pwdText, " ", sizeof(pwdText));
+        strncpy(dataText, " ", sizeof(dataText));
 
         if (pulseSamples == 0) {
             idx++;
@@ -4091,7 +4071,7 @@ static int CmdT55xxSniff(const char *Cmd) {
                 // We auto find widths
                 if ((width0 == 0) && (width1 == 0)) {
                     // We ignore bit 0 for the moment as it may be a ref. pulse, so check last
-                    uint8_t ii = 2;
+                    uint32_t ii = 2;
                     minWidth = pulseBuffer[1];
                     maxWidth = pulseBuffer[1];
                     bool done = false;
@@ -4155,7 +4135,7 @@ static int CmdT55xxSniff(const char *Cmd) {
                         }
                         blockData = 0;
                         have_data = true;
-                        sprintf(modeText, "Default Read");
+                        modeText = "Default Read";
                     }
 
                     // Password Write
@@ -4183,12 +4163,16 @@ static int CmdT55xxSniff(const char *Cmd) {
                                 blockAddr |= 1;
                         }
                         have_data = true;
-                        sprintf(modeText, "Default pwd write");
-                        sprintf(pwdText, "%08X", usedPassword);
-                        sprintf(dataText, "%08X", blockData);
+                        modeText = "Default pwd write";
+                        snprintf(pwdText, sizeof(pwdText), " %08X", usedPassword);
+                        snprintf(dataText, sizeof(dataText), "%08X", blockData);
                     }
 
-                    // Default Write (or password read ??)
+                    // Default Write or password read ???
+                    // the most confusing command.
+                    // if the token is with a password - all is OK,
+                    // if not - read command with a password will lead to write the shifted password to the memory and:
+                    //    IF the most bit of the data is `1` ----> IT LEADS TO LOCK this block of the memory
                     if (dataLen == 38) {
                         t55sniff_trim_samples(pulseBuffer, &pulseIdx, 38);
 
@@ -4200,6 +4184,12 @@ static int CmdT55xxSniff(const char *Cmd) {
                             if (data[i] == '1')
                                 blockData |= 1;
                         }
+                        for (uint8_t i = 2; i <= 33; i++) {
+                            usedPassword <<= 1;
+                            if (data[i] == '1') {
+                                usedPassword |= 1;
+                            }
+                        }
                         blockAddr = 0;
                         for (uint8_t i = 35; i <= 37; i++) {
                             blockAddr <<= 1;
@@ -4207,8 +4197,9 @@ static int CmdT55xxSniff(const char *Cmd) {
                                 blockAddr |= 1;
                         }
                         have_data = true;
-                        sprintf(modeText, "Default write");
-                        sprintf(dataText, "%08X", blockData);
+                        modeText = "Default write/pwd read";
+                        snprintf(pwdText, sizeof(pwdText), "[%08X]", usedPassword);
+                        snprintf(dataText, sizeof(dataText), "%08X", blockData);
                     }
                 }
             }
@@ -4243,9 +4234,9 @@ static int CmdT55xxSniff(const char *Cmd) {
                                 blockAddr |= 1;
                         }
                         have_data = true;
-                        sprintf(modeText, "Leading 0 pwd write");
-                        sprintf(pwdText, "%08X", usedPassword);
-                        sprintf(dataText, "%08X", blockData);
+                        modeText = "Leading 0 pwd write";
+                        snprintf(pwdText, sizeof(pwdText), " %08X", usedPassword);
+                        snprintf(dataText, sizeof(dataText), "%08X", blockData);
                     }
                 }
             }
@@ -4254,9 +4245,9 @@ static int CmdT55xxSniff(const char *Cmd) {
         // Print results
         if (have_data) {
             if (blockAddr == 7)
-                PrintAndLogEx(SUCCESS, "%-20s  | "_GREEN_("%8s")" | "_YELLOW_("%8s")" |  "_YELLOW_("%d")"  |   "_GREEN_("%d")"  | %3d | %3d | %s", modeText, pwdText, dataText, blockAddr, page, minWidth, maxWidth, data);
+                PrintAndLogEx(SUCCESS, "%-22s  | "_GREEN_("%10s")" | "_YELLOW_("%8s")" |  "_YELLOW_("%d")"  |   "_GREEN_("%d")"  | %3d | %3d | %s", modeText, pwdText, dataText, blockAddr, page, minWidth, maxWidth, data);
             else
-                PrintAndLogEx(SUCCESS, "%-20s  | "_GREEN_("%8s")" | "_GREEN_("%8s")" |  "_GREEN_("%d")"  |   "_GREEN_("%d")"  | %3d | %3d | %s", modeText, pwdText, dataText, blockAddr, page, minWidth, maxWidth, data);
+                PrintAndLogEx(SUCCESS, "%-22s  | "_GREEN_("%10s")" | "_GREEN_("%8s")" |  "_GREEN_("%d")"  |   "_GREEN_("%d")"  | %3d | %3d | %s", modeText, pwdText, dataText, blockAddr, page, minWidth, maxWidth, data);
         }
     }
 

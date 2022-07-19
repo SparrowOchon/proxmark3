@@ -50,31 +50,32 @@ static void print_result(const em4x50_word_t *words, int fwr, int lwr) {
 
     for (int i = fwr; i <= lwr; i++) {
 
-        char s[50] = {0};
+        const char *s;
         switch (i) {
             case EM4X50_DEVICE_PASSWORD:
-                sprintf(s, _YELLOW_("password, write only"));
+                s = _YELLOW_("password, write only");
                 break;
             case EM4X50_PROTECTION:
-                sprintf(s, _YELLOW_("protection cfg (locked)"));
+                s = _YELLOW_("protection cfg (locked)");
                 break;
             case EM4X50_CONTROL:
-                sprintf(s, _YELLOW_("control cfg (locked)"));
+                s = _YELLOW_("control cfg (locked)");
                 break;
             case EM4X50_DEVICE_SERIAL:
-                sprintf(s, _YELLOW_("device serial number (read only)"));
+                s = _YELLOW_("device serial number (read only)");
                 break;
             case EM4X50_DEVICE_ID:
-                sprintf(s, _YELLOW_("device identification (read only)"));
+                s = _YELLOW_("device identification (read only)");
                 break;
             default:
-                sprintf(s, "user data");
+                s = "user data";
                 break;
         }
 
         char r[30] = {0};
         for (int j = 3; j >= 0; j--) {
-            sprintf(r + strlen(r), "%02x ", reflect8(words[i].byte[j]));
+            int offset = strlen(r);
+            snprintf(r + offset, sizeof(r) - offset, "%02x ", reflect8(words[i].byte[j]));
         }
 
         PrintAndLogEx(INFO, " %2i | " _GREEN_("%s") "| %s| %s",
@@ -134,35 +135,15 @@ static void print_info_result(uint8_t *data, bool verbose) {
 
 static int em4x50_load_file(const char *filename, uint8_t *data, size_t data_len, size_t *bytes_read) {
 
+    // read dump file
     uint8_t *dump = NULL;
-    int res = PM3_SUCCESS;
-    DumpFileType_t dftype = getfiletype(filename);
-    switch (dftype) {
-        case BIN: {
-            res = loadFile_safe(filename, ".bin", (void **)&dump, bytes_read);
-            break;
-        }
-        case EML: {
-            res = loadFileEML_safe(filename, (void **)&dump, bytes_read);
-            break;
-        }
-        case JSON: {
-            dump =  calloc(DUMP_FILESIZE, sizeof(uint8_t));
-            if (dump == NULL) {
-                PrintAndLogEx(ERR, "error, cannot allocate memory ");
-                return PM3_EMALLOC;
-            }
-            res = loadFileJSON(filename, (void *)dump, DUMP_FILESIZE, bytes_read, NULL);
-            break;
-        }
-        case DICTIONARY: {
-            free(dump);
-            PrintAndLogEx(ERR, "Error: Only BIN/JSON/EML formats allowed");
-            return PM3_EINVARG;
-        }
+    *bytes_read = 0;
+    int res = pm3_load_dump(filename, (void **)&dump, bytes_read, DUMP_FILESIZE);
+    if (res != PM3_SUCCESS) {
+        return res;
     }
 
-    if ((res != PM3_SUCCESS) && (*bytes_read != DUMP_FILESIZE)) {
+    if (*bytes_read != DUMP_FILESIZE) {
         free(dump);
         return PM3_EFILE;
     }
@@ -277,9 +258,7 @@ int CmdEM4x50ESave(const char *Cmd) {
         FillFileNameByUID(fptr, (uint8_t *)&data[4 * EM4X50_DEVICE_ID], "-dump", 4);
     }
 
-    saveFile(filename, ".bin", data, DUMP_FILESIZE);
-    saveFileEML(filename, data, DUMP_FILESIZE, 4);
-    saveFileJSON(filename, jsfEM4x50, data, DUMP_FILESIZE, NULL);
+    pm3_save_dump(filename, data, DUMP_FILESIZE, jsfEM4x50, 4);
     return PM3_SUCCESS;
 }
 
@@ -359,9 +338,9 @@ int CmdEM4x50Login(const char *Cmd) {
 
     // print response
     if (resp.status == PM3_SUCCESS)
-        PrintAndLogEx(SUCCESS, "Login " _GREEN_("ok"));
+        PrintAndLogEx(SUCCESS, "Login ( " _GREEN_("ok") " )");
     else
-        PrintAndLogEx(FAILED, "Login " _RED_("failed"));
+        PrintAndLogEx(FAILED, "Login ( " _RED_("failed") " )");
 
     return resp.status;
 }
@@ -730,7 +709,8 @@ int CmdEM4x50Reader(const char *Cmd) {
                 char r[30];
                 memset(r, 0, sizeof(r));
                 for (int j = 3; j >= 0; j--) {
-                    sprintf(r + strlen(r), "%02x ", reflect8(words[i].byte[j]));
+                    int offset = strlen(r);
+                    snprintf(r + offset, sizeof(r) - offset, "%02x ", reflect8(words[i].byte[j]));
                 }
 
                 PrintAndLogEx(INFO, _GREEN_(" %s") "| %s", sprint_hex(words[i].byte, 4), r);
@@ -808,8 +788,7 @@ int CmdEM4x50Dump(const char *Cmd) {
     // user supplied filename?
     if (fnLen == 0) {
         PrintAndLogEx(INFO, "Using UID as filename");
-        char *fptr = filename;
-        fptr += sprintf(fptr, "lf-4x50-");
+        char *fptr = filename + snprintf(filename, sizeof(filename), "lf-4x50-");
         FillFileNameByUID(fptr, words[EM4X50_DEVICE_ID].byte, "-dump", 4);
     }
 
@@ -818,9 +797,7 @@ int CmdEM4x50Dump(const char *Cmd) {
         memcpy(data + (i * 4), words[i].byte, 4);
     }
 
-    saveFile(filename, ".bin", data, sizeof(data));
-    saveFileEML(filename, data, sizeof(data), 4);
-    saveFileJSON(filename, jsfEM4x50, data, sizeof(data), NULL);
+    pm3_save_dump(filename, data, sizeof(data), jsfEM4x50, 4);
     return PM3_SUCCESS;
 }
 
@@ -966,7 +943,7 @@ int CmdEM4x50WritePwd(const char *Cmd) {
         return PM3_EFAILED;
     }
 
-    PrintAndLogEx(SUCCESS, "Writing new password %s (%s)"
+    PrintAndLogEx(SUCCESS, "Writing new password %s ( %s )"
                   , sprint_hex_inrow(npwd, sizeof(npwd))
                   , _GREEN_("ok")
                  );
@@ -1015,9 +992,9 @@ int CmdEM4x50Wipe(const char *Cmd) {
     }
 
     if (resp.status == PM3_SUCCESS) {
-        PrintAndLogEx(SUCCESS, "Resetting password to 00000000 (" _GREEN_("ok") ")");
+        PrintAndLogEx(SUCCESS, "Resetting password to 00000000 ( " _GREEN_("ok") " )");
     } else {
-        PrintAndLogEx(FAILED, "Resetting password " _RED_("failed"));
+        PrintAndLogEx(FAILED, "Resetting password ( " _RED_("failed") " )");
         return PM3_ESOFT;
     }
 
@@ -1107,8 +1084,7 @@ int CmdEM4x50Restore(const char *Cmd) {
 
     if (uidLen) {
         PrintAndLogEx(INFO, "Using UID as filename");
-        char *fptr = filename;
-        fptr += sprintf(fptr, "lf-4x50-");
+        char *fptr = filename + snprintf(filename, sizeof(filename), "lf-4x50-");
         FillFileNameByUID(fptr, uid, "-dump", 4);
     }
 

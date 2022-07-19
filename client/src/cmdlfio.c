@@ -137,12 +137,12 @@ int demodIOProx(bool verbose) {
     calccrc &= 0xff;
     calccrc = 0xff - calccrc;
 
-    char crc_str[36] = {0};
+    char crc_str[40] = {0};
 
     if (crc == calccrc) {
-        snprintf(crc_str, sizeof(crc_str), "(" _GREEN_("ok") ")");
+        snprintf(crc_str, sizeof(crc_str), "( " _GREEN_("ok") " )");
     } else {
-        snprintf(crc_str, sizeof(crc_str), "(" _RED_("fail") ") 0x%02X != 0x%02X", crc, calccrc);
+        snprintf(crc_str, sizeof(crc_str), "( " _RED_("fail") " ) 0x%02X != 0x%02X", crc, calccrc);
         retval = PM3_ESOFT;
     }
 
@@ -316,12 +316,23 @@ static int CmdIOProxClone(const char *Cmd) {
 
     // EM4305
     if (em) {
+        // TODO: it seems an EM4305 tag supporting FSK still runs at RF/50 even if configured at RF/64
+        // lf em 4x05 info <> lf read ; data detectclock --fs
+        // So, it seems cloning ioProx on EM4305 is not possible...
         blocks[0] = EM4305_IOPROX_CONFIG_BLOCK;
         snprintf(cardtype, sizeof(cardtype), "EM4305/4469");
     }
 
     blocks[1] = bytebits_to_byte(bits, 32);
     blocks[2] = bytebits_to_byte(bits + 32, 32);
+
+    // EM4305
+    if (em) {
+        // invert FSK data
+        for (uint8_t i = 1; i < ARRAYLEN(blocks); i++) {
+            blocks[i] = blocks[i] ^ 0xFFFFFFFF;
+        }
+    }
 
     PrintAndLogEx(INFO, "Preparing to clone ioProx to " _YELLOW_("%s") " with Version: " _GREEN_("%u") " FC: " _GREEN_("%u (0x%02x)") " CN: " _GREEN_("%u")
                   , cardtype

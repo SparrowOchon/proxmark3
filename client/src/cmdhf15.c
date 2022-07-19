@@ -39,7 +39,7 @@
 #include "graph.h"
 #include "crc16.h"             // iso15 crc
 #include "cmddata.h"           // getsamples
-#include "fileutils.h"         // savefileEML
+#include "fileutils.h"         // pm3_save_dump
 #include "cliparser.h"
 #include "util_posix.h"        // msleep
 
@@ -429,13 +429,13 @@ static int getUID(bool loop, uint8_t *buf) {
         clearCommandBuffer();
         SendCommandMIX(CMD_HF_ISO15693_COMMAND, sizeof(data), fast, reply, data, sizeof(data));
         PacketResponseNG resp;
-        if (WaitForResponseTimeout(CMD_ACK, &resp, 2000)) {
+        if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000)) {
 
-            int resplen = resp.oldarg[0];
-            if (resplen >= 12 && CheckCrc15(resp.data.asBytes, 12)) {
+            if (resp.status == PM3_SUCCESS && resp.length >= 12 && CheckCrc15(resp.data.asBytes, 12)) {
 
-                if (buf)
+                if (buf) {
                     memcpy(buf, resp.data.asBytes + 2, 8);
+                }
 
                 DropField();
 
@@ -654,7 +654,7 @@ static int NxpSysInfo(uint8_t *uid) {
     uint16_t reqlen = 0;
 
     req[reqlen++] |= ISO15_REQ_SUBCARRIER_SINGLE | ISO15_REQ_DATARATE_HIGH | ISO15_REQ_NONINVENTORY | ISO15_REQ_ADDRESS;
-    req[reqlen++] = ISO15693_GET_SYSTEM_INFO;
+    req[reqlen++] = ISO15693_GET_NXP_SYSTEM_INFO;
     req[reqlen++] = 0x04; // IC manufacturer code
     memcpy(req + 3, uid, 8); // add UID
     reqlen += 8;
@@ -665,7 +665,7 @@ static int NxpSysInfo(uint8_t *uid) {
     PacketResponseNG resp;
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, reply, req, reqlen);
-    if (WaitForResponseTimeout(CMD_ACK, &resp, 2000) == false) {
+    if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
         PrintAndLogEx(WARNING, "iso15693 timeout");
         DropField();
         return PM3_ETIMEOUT;
@@ -673,12 +673,11 @@ static int NxpSysInfo(uint8_t *uid) {
 
     DropField();
 
-    int status = resp.oldarg[0];
-    if (status == PM3_ETEAROFF) {
-        return status;
+    if (resp.status == PM3_ETEAROFF) {
+        return resp.status;
     }
 
-    if (status < 2) {
+    if (resp.length < 2) {
         PrintAndLogEx(WARNING, "iso15693 card doesn't answer to NXP systeminfo command");
         return PM3_EWRONGANSWER;
     }
@@ -736,13 +735,13 @@ static int NxpSysInfo(uint8_t *uid) {
         clearCommandBuffer();
         SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, reply, req, reqlen);
 
-        if (!WaitForResponseTimeout(CMD_ACK, &resp, 2000)) {
+        if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
             PrintAndLogEx(WARNING, "iso15693 timeout");
         } else {
             PrintAndLogEx(NORMAL, "");
 
-            status = resp.oldarg[0];
-            if (status < 2) {
+
+            if (resp.length < 2) {
                 PrintAndLogEx(INFO, "  EAS (Electronic Article Surveillance) is not active");
             } else {
                 recv = resp.data.asBytes;
@@ -770,7 +769,7 @@ static int NxpSysInfo(uint8_t *uid) {
         clearCommandBuffer();
         SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, reply, req, reqlen);
 
-        if (WaitForResponseTimeout(CMD_ACK, &resp, 2000) == false) {
+        if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
             PrintAndLogEx(WARNING, "iso15693 timeout");
             DropField();
             return PM3_ETIMEOUT;
@@ -778,8 +777,7 @@ static int NxpSysInfo(uint8_t *uid) {
 
         DropField();
 
-        status = resp.oldarg[0];
-        if (status < 2) {
+        if (resp.length < 2) {
             PrintAndLogEx(WARNING, "iso15693 card doesn't answer to READ SIGNATURE command");
             return PM3_EWRONGANSWER;
         }
@@ -869,7 +867,7 @@ static int CmdHF15Info(const char *Cmd) {
     PacketResponseNG resp;
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, read_response, req, reqlen);
-    if (WaitForResponseTimeout(CMD_ACK, &resp, 2000) == false) {
+    if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
         PrintAndLogEx(WARNING, "iso15693 timeout");
         DropField();
         return PM3_ETIMEOUT;
@@ -877,12 +875,11 @@ static int CmdHF15Info(const char *Cmd) {
 
     DropField();
 
-    int status = resp.oldarg[0];
-    if (status == PM3_ETEAROFF) {
-        return status;
+    if (resp.status == PM3_ETEAROFF) {
+        return resp.status;
     }
-    if (status < 2) {
-        PrintAndLogEx(WARNING, "iso15693 card doesn't answer to systeminfo command (%d)", status);
+    if (resp.length < 2) {
+        PrintAndLogEx(WARNING, "iso15693 card doesn't answer to systeminfo command (%d)", resp.length);
         return PM3_EWRONGANSWER;
     }
 
@@ -899,7 +896,7 @@ static int CmdHF15Info(const char *Cmd) {
     PrintAndLogEx(INFO, "-------------------------------------------------------------");
     PrintAndLogEx(SUCCESS, "      TYPE: " _YELLOW_("%s"), getTagInfo_15(data + 2));
     PrintAndLogEx(SUCCESS, "       UID: " _GREEN_("%s"), iso15693_sprintUID(NULL, uid));
-    PrintAndLogEx(SUCCESS, "   SYSINFO: %s", sprint_hex(data, status - 2));
+    PrintAndLogEx(SUCCESS, "   SYSINFO: %s", sprint_hex(data, resp.length - 2));
 
     // DSFID
     if (data[1] & 0x01)
@@ -930,8 +927,12 @@ static int CmdHF15Info(const char *Cmd) {
     }
 
     // Check if SLIX2 and attempt to get NXP System Information
-    PrintAndLogEx(DEBUG, "4 & 08 :: %02x   7 == 1 :: %u   8 == 4 :: %u", data[4], data[7], data[8]);
-    if (data[8] == 0x04 && data[7] == 0x01 && data[4] & 0x80) {
+    PrintAndLogEx(DEBUG, "Byte 6 :: %02x   Byte 7 :: %02x   Byte 8 :: %02x", data[6], data[7], data[8]);
+    // SLIX2 uses xxx0 1xxx format on data[6] of UID
+    uint8_t nxp_version = data[6] & 0x18;
+    PrintAndLogEx(DEBUG, "NXP Version: %02x", nxp_version);
+    if (data[8] == 0x04 && data[7] == 0x01 && nxp_version == 0x08) {
+        PrintAndLogEx(DEBUG, "SLIX2 Detected, getting NXP System Info");
         return NxpSysInfo(uid);
     }
 
@@ -1151,16 +1152,15 @@ static int CmdHF15WriteAfi(const char *Cmd) {
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, read_respone, req, reqlen);
 
-    if (WaitForResponseTimeout(CMD_ACK, &resp, 2000) == false) {
+    if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
         PrintAndLogEx(ERR, "iso15693 timeout");
         DropField();
         return PM3_ETIMEOUT;
     }
     DropField();
 
-    int status = resp.oldarg[0];
-    if (status == PM3_ETEAROFF) {
-        return status;
+    if (resp.status == PM3_ETEAROFF) {
+        return resp.status;
     }
 
     uint8_t *data = resp.data.asBytes;
@@ -1250,16 +1250,15 @@ static int CmdHF15WriteDsfid(const char *Cmd) {
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, read_respone, req, reqlen);
 
-    if (WaitForResponseTimeout(CMD_ACK, &resp, 2000) == false) {
+    if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
         PrintAndLogEx(ERR, "iso15693 timeout");
         DropField();
         return PM3_ETIMEOUT;
     }
 
     DropField();
-    int status = resp.oldarg[0];
-    if (status == PM3_ETEAROFF) {
-        return status;
+    if (resp.status == PM3_ETEAROFF) {
+        return resp.status;
     }
 
     uint8_t *data = resp.data.asBytes;
@@ -1363,13 +1362,12 @@ static int CmdHF15Dump(const char *Cmd) {
         clearCommandBuffer();
         SendCommandMIX(CMD_HF_ISO15693_COMMAND, sizeof(req), fast, read_respone, req, sizeof(req));
 
-        if (WaitForResponseTimeout(CMD_ACK, &resp, 2000)) {
+        if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000)) {
 
-            int len = resp.oldarg[0];
-            if (len == PM3_ETEAROFF) {
+            if (resp.status == PM3_ETEAROFF) {
                 continue;
             }
-            if (len < 2) {
+            if (resp.length < 2) {
                 PrintAndLogEx(NORMAL, "");
                 PrintAndLogEx(FAILED, "iso15693 command failed");
                 continue;
@@ -1377,7 +1375,7 @@ static int CmdHF15Dump(const char *Cmd) {
 
             uint8_t *recv = resp.data.asBytes;
 
-            if (CheckCrc15(recv, len) == false) {
+            if (CheckCrc15(recv, resp.length) == false) {
                 PrintAndLogEx(NORMAL, "");
                 PrintAndLogEx(FAILED, "crc (" _RED_("fail") ")");
                 continue;
@@ -1408,9 +1406,9 @@ static int CmdHF15Dump(const char *Cmd) {
     for (int i = 0; i < blocknum; i++) {
         char lck[16] = {0};
         if (mem[i].lock) {
-            sprintf(lck, _RED_("%d"), mem[i].lock);
+            snprintf(lck, sizeof(lck), _RED_("%d"), mem[i].lock);
         } else {
-            sprintf(lck, "%d", mem[i].lock);
+            snprintf(lck, sizeof(lck), "%d", mem[i].lock);
         }
         PrintAndLogEx(INFO, "%3d/0x%02X | %s | %s | %s"
                       , i
@@ -1431,9 +1429,7 @@ static int CmdHF15Dump(const char *Cmd) {
     }
 
     size_t datalen = blocknum * 4;
-    saveFile(filename, ".bin", data, datalen);
-    saveFileEML(filename, data, datalen, 4);
-    saveFileJSON(filename, jsf15, data, datalen, NULL);
+    pm3_save_dump(filename, data, datalen, jsf15, 4);
     return PM3_SUCCESS;
 }
 
@@ -1482,17 +1478,16 @@ static int CmdHF15Raw(const char *Cmd) {
     SendCommandMIX(CMD_HF_ISO15693_COMMAND, datalen, fast, read_respone, data, datalen);
 
     if (read_respone) {
-        if (WaitForResponseTimeout(CMD_ACK, &resp, 2000)) {
-            int len = resp.oldarg[0];
-            if (len == PM3_ETEAROFF) {
+        if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000)) {
+            if (resp.status == PM3_ETEAROFF) {
                 DropField();
-                return len;
+                return resp.status;
             }
-            if (len < 2) {
+            if (resp.length < 2) {
                 PrintAndLogEx(WARNING, "command failed");
             } else {
-                PrintAndLogEx(SUCCESS, "received %i octets", len);
-                PrintAndLogEx(SUCCESS, "%s", sprint_hex(resp.data.asBytes, len));
+                PrintAndLogEx(SUCCESS, "received %i octets", resp.length);
+                PrintAndLogEx(SUCCESS, "%s", sprint_hex(resp.data.asBytes, resp.length));
             }
         } else {
             PrintAndLogEx(WARNING, "timeout while waiting for reply");
@@ -1588,7 +1583,7 @@ static int CmdHF15Readmulti(const char *Cmd) {
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, read_respone, req, reqlen);
 
-    if (WaitForResponseTimeout(CMD_ACK, &resp, 2000) == false) {
+    if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
         PrintAndLogEx(FAILED, "iso15693 card timeout");
         DropField();
         return PM3_ETIMEOUT;
@@ -1596,19 +1591,18 @@ static int CmdHF15Readmulti(const char *Cmd) {
 
     DropField();
 
-    int status = resp.oldarg[0];
-    if (status == PM3_ETEAROFF) {
-        return status;
+    if (resp.status == PM3_ETEAROFF) {
+        return resp.status;
     }
 
-    if (status < 2) {
+    if (resp.length < 2) {
         PrintAndLogEx(FAILED, "iso15693 card readmulti failed");
         return PM3_EWRONGANSWER;
     }
 
     uint8_t *data = resp.data.asBytes;
 
-    if (CheckCrc15(data, status) == false) {
+    if (CheckCrc15(data, resp.length) == false) {
         PrintAndLogEx(FAILED, "crc (" _RED_("fail") ")");
         return PM3_ESOFT;
     }
@@ -1630,9 +1624,9 @@ static int CmdHF15Readmulti(const char *Cmd) {
     for (int i = start; i < stop; i += 5) {
         char lck[16] = {0};
         if (data[i]) {
-            sprintf(lck, _RED_("%d"), data[i]);
+            snprintf(lck, sizeof(lck), _RED_("%d"), data[i]);
         } else {
-            sprintf(lck, "%d", data[i]);
+            snprintf(lck, sizeof(lck), "%d", data[i]);
         }
         PrintAndLogEx(INFO, "%3d/0x%02X | %s | %s | %s", currblock, currblock, sprint_hex(data + i + 1, 4), lck, sprint_ascii(data + i + 1, 4));
         currblock++;
@@ -1721,7 +1715,7 @@ static int CmdHF15Readblock(const char *Cmd) {
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, read_respone, req, reqlen);
 
-    if (WaitForResponseTimeout(CMD_ACK, &resp, 2000) == false) {
+    if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
         PrintAndLogEx(ERR, "iso15693 timeout");
         DropField();
         return PM3_ETIMEOUT;
@@ -1729,18 +1723,17 @@ static int CmdHF15Readblock(const char *Cmd) {
 
     DropField();
 
-    int status = resp.oldarg[0];
-    if (status == PM3_ETEAROFF) {
-        return status;
+    if (resp.status == PM3_ETEAROFF) {
+        return resp.status;
     }
-    if (status < 2) {
+    if (resp.length < 2) {
         PrintAndLogEx(ERR, "iso15693 command failed");
         return PM3_EWRONGANSWER;
     }
 
     uint8_t *data = resp.data.asBytes;
 
-    if (CheckCrc15(data, status) == false) {
+    if (CheckCrc15(data, resp.length) == false) {
         PrintAndLogEx(FAILED, "crc (" _RED_("fail") ")");
         return PM3_ESOFT;
     }
@@ -1753,14 +1746,14 @@ static int CmdHF15Readblock(const char *Cmd) {
     // print response
     char lck[16] = {0};
     if (data[1]) {
-        sprintf(lck, _RED_("%d"), data[1]);
+        snprintf(lck, sizeof(lck), _RED_("%d"), data[1]);
     } else {
-        sprintf(lck, "%d", data[1]);
+        snprintf(lck, sizeof(lck), "%d", data[1]);
     }
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "      #%3d  |lck| ascii", block);
     PrintAndLogEx(INFO, "------------+---+------");
-    PrintAndLogEx(INFO, "%s| %s | %s", sprint_hex(data + 2, status - 4), lck, sprint_ascii(data + 2, status - 4));
+    PrintAndLogEx(INFO, "%s| %s | %s", sprint_hex(data + 2, resp.length - 4), lck, sprint_ascii(data + 2, resp.length - 4));
     PrintAndLogEx(NORMAL, "");
     return PM3_SUCCESS;
 }
@@ -1771,19 +1764,18 @@ static int hf_15_write_blk(bool verbose, bool fast, uint8_t *req, uint8_t reqlen
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO15693_COMMAND, reqlen, fast, read_response, req, reqlen);
     PacketResponseNG resp;
-    if (WaitForResponseTimeout(CMD_ACK, &resp, 2000) == false) {
+    if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
         PrintAndLogEx(FAILED, "iso15693 card timeout, data may be written anyway");
         DropField();
         return PM3_ETIMEOUT;
     }
 
     DropField();
-    int status = resp.oldarg[0];
-    if (status == PM3_ETEAROFF) {
-        return status;
+    if (resp.status == PM3_ETEAROFF) {
+        return resp.status;
     }
 
-    if (status < 2) {
+    if (resp.length < 2) {
         if (verbose) {
             PrintAndLogEx(FAILED, "iso15693 command failed");
         }
@@ -1791,7 +1783,7 @@ static int hf_15_write_blk(bool verbose, bool fast, uint8_t *req, uint8_t reqlen
     }
 
     uint8_t *recv = resp.data.asBytes;
-    if (CheckCrc15(recv, status) == false) {
+    if (CheckCrc15(recv, resp.length) == false) {
         if (verbose) {
             PrintAndLogEx(FAILED, "crc (" _RED_("fail") ")");
         }
@@ -1933,7 +1925,7 @@ static int CmdHF15Restore(const char *Cmd) {
     int fnlen = 0;
     char filename[FILE_PATH_SIZE] = {0};
     CLIParamStrToBuf(arg_get_str(ctx, 6), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
-    int retries = arg_get_int_def(ctx, 7, 3);
+    uint32_t retries = arg_get_u32_def(ctx, 7, 3);
     int blocksize = arg_get_int_def(ctx, 8, 4);
     bool verbose = arg_get_lit(ctx, 9);
     CLIParserFree(ctx);
@@ -1981,44 +1973,19 @@ static int CmdHF15Restore(const char *Cmd) {
     }
     PrintAndLogEx(INFO, "Using block size... %d", blocksize);
 
+
+    // read dump file
+    uint8_t *dump = NULL;
+    size_t bytes_read = 0;
     // 4bytes * 256 blocks.  Should be enough..
-    uint8_t *data = NULL;
-    size_t datalen = 0;
-    int res = PM3_SUCCESS;
-    DumpFileType_t dftype = getfiletype(filename);
-    switch (dftype) {
-        case BIN: {
-            res = loadFile_safe(filename, ".bin", (void **)&data, &datalen);
-            break;
-        }
-        case EML: {
-            res = loadFileEML_safe(filename, (void **)&data, &datalen);
-            break;
-        }
-        case JSON: {
-            data = calloc(4 * 256, sizeof(uint8_t));
-            if (data == NULL) {
-                PrintAndLogEx(WARNING, "Fail, cannot allocate memory");
-                return PM3_EMALLOC;
-            }
-            res = loadFileJSON(filename, (void *)data, 256 * 4, &datalen, NULL);
-            break;
-        }
-        case DICTIONARY: {
-            PrintAndLogEx(ERR, "Error: Only BIN/JSON/EML formats allowed");
-            free(data);
-            return PM3_EINVARG;
-        }
-    }
-
+    int res = pm3_load_dump(filename, (void **)&dump, &bytes_read, (4 * 256));
     if (res != PM3_SUCCESS) {
-        free(data);
-        return PM3_EFILE;
+        return res;
     }
 
-    if ((datalen % blocksize) != 0) {
-        PrintAndLogEx(WARNING, "datalen %zu isn't dividable with blocksize %d", datalen, blocksize);
-        free(data);
+    if ((bytes_read % blocksize) != 0) {
+        PrintAndLogEx(WARNING, "datalen %zu isn't dividable with blocksize %d", bytes_read, blocksize);
+        free(dump);
         return PM3_ESOFT;
     }
 
@@ -2029,14 +1996,14 @@ static int CmdHF15Restore(const char *Cmd) {
     int retval = PM3_SUCCESS;
     size_t bytes = 0;
     uint16_t i = 0;
-    while (bytes < datalen) {
+    while (bytes < bytes_read) {
 
         req[reqlen] = i;
         // copy over the data to the request
-        memcpy(req + reqlen + 1, data + bytes, blocksize);
+        memcpy(req + reqlen + 1, dump + bytes, blocksize);
         AddCrc15(req, reqlen + 1 + blocksize);
 
-        uint8_t tried = 0;
+        uint32_t tried = 0;
         for (tried = 0; tried < retries; tried++) {
 
             retval = hf_15_write_blk(verbose, fast, req, (reqlen + 1 + blocksize + 2));
@@ -2048,7 +2015,7 @@ static int CmdHF15Restore(const char *Cmd) {
         }
 
         if (tried >= retries) {
-            free(data);
+            free(dump);
             PrintAndLogEx(NORMAL, "");
             PrintAndLogEx(FAILED, "restore failed. Too many retries.");
             return retval;
@@ -2056,7 +2023,7 @@ static int CmdHF15Restore(const char *Cmd) {
         bytes += blocksize;
         i++;
     }
-    free(data);
+    free(dump);
 
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "done");

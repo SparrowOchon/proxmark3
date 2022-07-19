@@ -208,7 +208,7 @@ static int CmdFDXBdemodBI(const char *Cmd) {
     PrintAndLogEx(SUCCESS, "Reserved/RFU:      %u", reservedCode);
     PrintAndLogEx(SUCCESS, "Animal Tag:        %s", animalBit ? _YELLOW_("True") : "False");
     PrintAndLogEx(SUCCESS, "Has extended data: %s [0x%X]", dataBlockBit ? _YELLOW_("True") : "False", extended);
-    PrintAndLogEx(SUCCESS, "CRC:           0x%04X - [%04X] - %s", crc_16, calcCrc, (calcCrc == crc_16) ? _GREEN_("Passed") : _RED_("Fail") );
+    PrintAndLogEx(SUCCESS, "CRC:           0x%04X - [%04X] - %s", crc_16, calcCrc, (calcCrc == crc_16) ? _GREEN_("ok") : _RED_("fail") );
 
     if (g_debugMode) {
         PrintAndLogEx(DEBUG, "Start marker %d;   Size %d", preambleIndex, size);
@@ -581,7 +581,7 @@ int demodFDXB(bool verbose) {
 
     uint8_t c[] = {0, 0};
     compute_crc(CRC_11784, raw, sizeof(raw), &c[0], &c[1]);
-    PrintAndLogEx(SUCCESS, "CRC-16             0x%04X (%s)", crc, (crc == (c[1] << 8 | c[0])) ? _GREEN_("ok") : _RED_("fail"));
+    PrintAndLogEx(SUCCESS, "CRC-16             0x%04X ( %s )", crc, (crc == (c[1] << 8 | c[0])) ? _GREEN_("ok") : _RED_("fail"));
     // iceman: crc doesn't protect the extended data?
     PrintAndLogEx(SUCCESS, "Raw                " _GREEN_("%s"), sprint_hex(raw, 8));
 
@@ -703,10 +703,10 @@ static int CmdFdxBClone(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "lf fdxb clone",
                   "clone a FDX-B tag to a T55x7, Q5/T5555 or EM4305/4469 tag.",
-                  "lf fdxb clone --country 999 --national 1337 --animal\n"
-                  "lf fdxb clone --country 999 --national 1337 --extended 016A\n"
-                  "lf fdxb clone --q5 --country 999 --national 1337   -> encode for Q5/T5555 tag\n"
-                  "lf fdxb clone --em --country 999 --national 1337   -> encode for EM4305/4469"
+                  "lf fdxb clone --country 999 --national 1337 --animal        -> encode for T55x7 tag, with animal bit\n"
+                  "lf fdxb clone --country 999 --national 1337 --extended 016A -> encode for T55x7 tag, with extended data\n"
+                  "lf fdxb clone --country 999 --national 1337 --q5            -> encode for Q5/T5555 tag\n"
+                  "lf fdxb clone --country 999 --national 1337 --em            -> encode for EM4305/4469"
                  );
 
     void *argtable[] = {

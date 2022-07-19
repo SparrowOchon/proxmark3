@@ -44,28 +44,28 @@ install: all common/install
 common/install:
 	$(info [@] Installing common resources to $(MYDESTDIR)$(PREFIX)...)
 ifneq (,$(INSTALLSCRIPTS))
-	$(Q)$(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)
-	$(Q)$(CP) $(INSTALLSCRIPTS) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)
+	$(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)
+	$(Q)$(INSTALLSUDO) $(CP) $(INSTALLSCRIPTS) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)
 endif
 ifneq (,$(INSTALLSHARES))
-	$(Q)$(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
-	$(Q)$(CP) $(INSTALLSHARES) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
+	$(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
+	$(Q)$(INSTALLSUDO) $(CP) $(INSTALLSHARES) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
 endif
 ifneq (,$(INSTALLDOCS))
-	$(Q)$(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLDOCSRELPATH)
-	$(Q)$(CP) $(INSTALLDOCS) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLDOCSRELPATH)
+	$(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLDOCSRELPATH)
+	$(Q)$(INSTALLSUDO) $(CP) $(INSTALLDOCS) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLDOCSRELPATH)
 endif
 ifneq (,$(INSTALLTOOLS))
-	$(Q)$(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLTOOLSRELPATH)
-	$(Q)$(CP) $(foreach tool,$(INSTALLTOOLS),tools/$(tool)) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLTOOLSRELPATH)
+	$(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLTOOLSRELPATH)
+	$(Q)$(INSTALLSUDO) $(CP) $(foreach tool,$(INSTALLTOOLS),tools/$(tool)) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLTOOLSRELPATH)
 endif
 ifneq (,$(INSTALLSIMFW))
-	$(Q)$(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)
-	$(Q)$(CP) $(foreach fw,$(INSTALLSIMFW),client/resources/$(fw)) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)
+	$(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)
+	$(Q)$(INSTALLSUDO) $(CP) $(foreach fw,$(INSTALLSIMFW),client/resources/$(fw)) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)
 endif
 ifeq ($(platform),Linux)
-	$(Q)$(MKDIR) $(DESTDIR)$(UDEV_PREFIX)
-	$(Q)$(CP) driver/77-pm3-usb-device-blacklist.rules $(DESTDIR)$(UDEV_PREFIX)/77-pm3-usb-device-blacklist.rules
+	$(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(UDEV_PREFIX)
+	$(Q)$(INSTALLSUDO) $(CP) driver/77-pm3-usb-device-blacklist.rules $(DESTDIR)$(UDEV_PREFIX)/77-pm3-usb-device-blacklist.rules
 endif
 
 uninstall: common/uninstall
@@ -73,27 +73,27 @@ uninstall: common/uninstall
 common/uninstall:
 	$(info [@] Uninstalling common resources from $(MYDESTDIR)$(PREFIX)...)
 ifneq (,$(INSTALLSCRIPTS))
-	$(Q)$(RM) $(foreach script,$(INSTALLSCRIPTS),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)$(PATHSEP)$(notdir $(script)))
+	$(Q)$(INSTALLSUDO) $(RM) $(foreach script,$(INSTALLSCRIPTS),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLBINRELPATH)$(PATHSEP)$(notdir $(script)))
 endif
 ifneq (,$(INSTALLSHARES))
-	$(Q)$(RMDIR) $(foreach share,$(INSTALLSHARES),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)$(PATHSEP)$(notdir $(share)))
+	$(Q)$(INSTALLSUDO) $(RMDIR) $(foreach share,$(INSTALLSHARES),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)$(PATHSEP)$(notdir $(share)))
 endif
 ifneq (,$(INSTALLDOCS))
-	$(Q)$(RMDIR) $(foreach doc,$(INSTALLDOCS),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLDOCSRELPATH)$(PATHSEP)$(notdir $(doc)))
-	$(Q)$(RMDIR_SOFT) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLDOCSRELPATH)
+	$(Q)$(INSTALLSUDO) $(RMDIR) $(foreach doc,$(INSTALLDOCS),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLDOCSRELPATH)$(PATHSEP)$(notdir $(doc)))
+	$(Q)$(INSTALLSUDO) $(RMDIR_SOFT) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLDOCSRELPATH)
 endif
 ifneq (,$(INSTALLTOOLS))
-	$(Q)$(RM) $(foreach tool,$(INSTALLTOOLS),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLTOOLSRELPATH)$(PATHSEP)$(notdir $(tool)))
+	$(Q)$(INSTALLSUDO) $(RM) $(foreach tool,$(INSTALLTOOLS),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLTOOLSRELPATH)$(PATHSEP)$(notdir $(tool)))
 endif
-	$(Q)$(RMDIR_SOFT) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLTOOLSRELPATH)
+	$(Q)$(INSTALLSUDO) $(RMDIR_SOFT) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLTOOLSRELPATH)
 ifneq (,$(INSTALLSIMFW))
-	$(Q)$(RM) $(foreach fw,$(INSTALLSIMFW),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)$(PATHSEP)$(notdir $(fw)))
+	$(Q)$(INSTALLSUDO) $(RM) $(foreach fw,$(INSTALLSIMFW),$(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)$(PATHSEP)$(notdir $(fw)))
 endif
-	$(Q)$(RMDIR_SOFT) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)
+	$(Q)$(INSTALLSUDO) $(RMDIR_SOFT) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLFWRELPATH)
 ifeq ($(platform),Linux)
-	$(Q)$(RM) $(DESTDIR)$(UDEV_PREFIX)/77-pm3-usb-device-blacklist.rules
+	$(Q)$(INSTALLSUDO) $(RM) $(DESTDIR)$(UDEV_PREFIX)/77-pm3-usb-device-blacklist.rules
 endif
-	$(Q)$(RMDIR_SOFT) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
+	$(Q)$(INSTALLSUDO) $(RMDIR_SOFT) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
 
 # tests
 mfkey/check: FORCE
@@ -166,7 +166,7 @@ hitag2crack/%: FORCE
 	$(Q)$(MAKE) --no-print-directory -C tools/hitag2crack $(patsubst hitag2crack/%,%,$@) DESTDIR=$(MYDESTDIR)
 FORCE: # Dummy target to force remake in the subdirectories, even if files exist (this Makefile doesn't know about the prerequisites)
 
-.PHONY: all clean install uninstall help _test bootrom fullimage recovery client mfkey nonce2key mf_nonce_brute hitag2crack style miscchecks release FORCE udev accessrights cleanifplatformchanged
+.PHONY: all clean install uninstall help _test bootrom fullimage recovery client mfkey nonce2key mf_nonce_brute mfd_aes_brute hitag2crack style miscchecks release FORCE udev accessrights cleanifplatformchanged
 
 help:
 	@echo "Multi-OS Makefile"
@@ -186,7 +186,7 @@ help:
 	@echo "+ mfkey           - Make tools/mfkey"
 	@echo "+ nonce2key       - Make tools/nonce2key"
 	@echo "+ mf_nonce_brute  - Make tools/mf_nonce_brute"
-	@echo "+ mf_aes_brute    - Make tools/mfd_aes_brute"
+	@echo "+ mfd_aes_brute   - Make tools/mfd_aes_brute"
 	@echo "+ hitag2crack     - Make tools/hitag2crack"
 	@echo "+ fpga_compress   - Make tools/fpga_compress"
 	@echo
@@ -263,12 +263,13 @@ udev:
 # you need to logout, relogin to get this access right correct.
 # Finally,  you might need to run the proxmark3 client under SUDO on some systems
 accessrights:
-ifneq ($(wildcard /etc/arch-release),) #If user is running ArchLinux
-	sudo usermod -aG uucp $(USER) #Use specific command and group
-	sudo usermod -aG bluetooth $(USER) #Use specific command and group
+ifneq ($(wildcard /etc/arch-release),)
+#If user is running ArchLinux, use specific command and group
+	$(Q)sudo usermod -aG uucp $(USER)
+	$(Q)getent group bluetooth >/dev/null && sudo usermod -aG bluetooth $(USER) || true
 else
-	sudo adduser $(USER) dialout
-	sudo adduser $(USER) bluetooth
+	$(Q)sudo adduser $(USER) dialout
+	$(Q)getent group bluetooth >/dev/null && sudo adduser $(USER) bluetooth || true
 endif
 
 # easy printing of MAKE VARIABLES
@@ -292,7 +293,7 @@ style:
 	[ -x client/proxmark3 ] && client/proxmark3 -m > doc/commands.md
 	# Make sure python3 is installed
 	@command -v python3 >/dev/null || ( echo "Please install 'python3' package first" ; exit 1 )
-	# Update commands.json, patch port in cas it was run under Windows
+	# Update commands.json, patch port in case it was run under Windows
 	[ -x client/proxmark3 ] && client/proxmark3 --fulltext | sed 's#com[0-9]#/dev/ttyacm0#'|python3 client/pyscripts/pm3_help2json.py - doc/commands.json
 
 	# Update the readline autocomplete autogenerated code

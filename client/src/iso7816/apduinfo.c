@@ -296,7 +296,7 @@ const APDUCode_t *GetAPDUCode(uint8_t sw1, uint8_t sw2) {
     int mineq = ARRAYLEN(APDUCodeTable);
     int mineqindx = 0;
 
-    sprintf(buf, "%02X%02X", sw1, sw2);
+    snprintf(buf, sizeof(buf), "%02X%02X", sw1, sw2);
 
     for (int i = 0; i < ARRAYLEN(APDUCodeTable); i++) {
         int res = CodeCmp(APDUCodeTable[i].ID, buf);
@@ -327,6 +327,14 @@ const char *GetAPDUCodeDescription(uint8_t sw1, uint8_t sw2) {
         return cd->Description;
     else
         return APDUCodeTable[0].Description; //empty string
+}
+
+const char *GetSpecificAPDUCodeDesc(const APDUSpcCodeDescription_t *desc, const size_t desclen, uint16_t code) {
+    for (int i = 0; i < desclen; i++) {
+        if (desc[i].Code == code)
+            return desc[i].Description;
+    }
+    return GetAPDUCodeDescription(code >> 8, code & 0xff);
 }
 
 int APDUDecode(uint8_t *data, int len, APDU_t *apdu) {

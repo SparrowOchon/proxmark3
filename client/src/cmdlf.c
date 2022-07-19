@@ -137,7 +137,15 @@ static int CmdLFTune(const char *Cmd) {
         PrintAndLogEx(ERR, "freq must be between 47 and 600");
         return PM3_EINVARG;
     }
-    divisor = LF_FREQ2DIV(freq);
+
+    if (divisor != LF_DIVISOR_125 && freq != 125) {
+        PrintAndLogEx(ERR, "Select either `divisor` or `frequency`");
+        return PM3_EINVARG;
+    }
+
+    if (freq != 125)
+        divisor = LF_FREQ2DIV(freq);
+
 
     if ((is_bar + is_mix + is_value) > 1) {
         PrintAndLogEx(ERR, "Select only one output style");
@@ -174,7 +182,7 @@ static int CmdLFTune(const char *Cmd) {
     print_progress(0, max, style);
 
     // loop forever (till button pressed) if iter = 0 (default)
-    for (uint8_t i = 0; iter == 0 || i < iter; i++) {
+    for (uint32_t i = 0; iter == 0 || i < iter; i++) {
         if (kbd_enter_pressed()) {
             break;
         }
@@ -221,12 +229,12 @@ int CmdLFCommandRead(const char *Cmd) {
                   " - use " _YELLOW_("`lf config`") _CYAN_(" to set parameters"),
                   "lf cmdread -d 50 -z 116 -o 166 -e W3000 -c W00110                           --> probing for Hitag 1/S\n"
                   "lf cmdread -d 50 -z 116 -o 166 -e W3000 -c W11000                           --> probing for Hitag 2\n"
-                  "lf cmdread -d 50 -z 116 -o 166 -e W3000 -c W11000 -q -s 2000 -@             --> probing for Hitag 2, oscilloscope style\n"
+                  "lf cmdread -d 50 -z 116 -o 166 -e W3000 -c W11000 -s 2000 -@                --> probing for Hitag 2, oscilloscope style\n"
                   "lf cmdread -d 48 -z 112 -o 176 -e W3000 -e S240 -e E336 -c W0S00000010000E  --> probing for Hitag (us)\n"
                  );
 
     char div_str[70] = {0};
-    sprintf(div_str, "Extra symbol definition and duration (up to %i)", LF_CMDREAD_MAX_EXTRA_SYMBOLS);
+    snprintf(div_str, sizeof(div_str), "Extra symbol definition and duration (up to %i)", LF_CMDREAD_MAX_EXTRA_SYMBOLS);
 
     void *argtable[] = {
         arg_param_begin,
@@ -563,7 +571,7 @@ int CmdLFConfig(const char *Cmd) {
                  );
 
     char div_str[70] = {0};
-    sprintf(div_str, "Manually set freq divisor. %d -> 134 kHz, %d -> 125 kHz", LF_DIVISOR_134, LF_DIVISOR_125);
+    snprintf(div_str, sizeof(div_str), "Manually set freq divisor. %d -> 134 kHz, %d -> 125 kHz", LF_DIVISOR_134, LF_DIVISOR_125);
 
     void *argtable[] = {
         arg_param_begin,
@@ -631,7 +639,9 @@ int CmdLFConfig(const char *Cmd) {
     if (use_134)
         config.divisor = LF_DIVISOR_134;
 
-    config.averaging = (avg == 1);
+    // check if the config.averaging is not set by if(reset){...}
+    if (config.averaging == -1)
+        config.averaging = (avg == 1);
 
     if (bps > -1) {
         // bps is limited to 8
@@ -744,11 +754,10 @@ int lf_sniff(bool verbose, uint32_t samples) {
     struct p {
         uint32_t samples : 31;
         bool     verbose : 1;
-    } PACKED;
+    } PACKED payload;
 
-    struct p payload;
+    payload.samples = (samples & 0xFFFF);
     payload.verbose = verbose;
-    payload.samples = samples;
 
     clearCommandBuffer();
     SendCommandNG(CMD_LF_SNIFF_RAW_ADC, (uint8_t *)&payload, sizeof(payload));
@@ -756,7 +765,7 @@ int lf_sniff(bool verbose, uint32_t samples) {
     if (gs_lf_threshold_set) {
         WaitForResponse(CMD_LF_SNIFF_RAW_ADC, &resp);
     } else {
-        if (!WaitForResponseTimeout(CMD_LF_SNIFF_RAW_ADC, &resp, 2500)) {
+        if (WaitForResponseTimeout(CMD_LF_SNIFF_RAW_ADC, &resp, 2500) == false) {
             PrintAndLogEx(WARNING, "(lf_read) command execution time out");
             return PM3_ETIMEOUT;
         }
@@ -789,7 +798,7 @@ int CmdLFSniff(const char *Cmd) {
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
-    uint32_t samples = arg_get_u32_def(ctx, 1, 0);
+    uint32_t samples = (arg_get_u32_def(ctx, 1, 0) & 0xFFFF);
     bool verbose = arg_get_lit(ctx, 2);
     bool cm = arg_get_lit(ctx, 3);
     CLIParserFree(ctx);
@@ -840,13 +849,13 @@ int lfsim_upload_gb(void) {
 
     //can send only 512 bits at a time (1 byte sent per bit...)
     PrintAndLogEx(INFO, "." NOLF);
-    for (uint16_t i = 0; i < g_GraphTraceLen; i += PM3_CMD_DATA_SIZE - 3) {
+    for (size_t i = 0; i < g_GraphTraceLen; i += PM3_CMD_DATA_SIZE - 3) {
 
         size_t len = MIN((g_GraphTraceLen - i), PM3_CMD_DATA_SIZE - 3);
         clearCommandBuffer();
         payload_up.offset = i;
 
-        for (uint16_t j = 0; j < len; j++)
+        for (size_t j = 0; j < len; j++)
             payload_up.data[j] = g_GraphBuffer[i + j];
 
         SendCommandNG(CMD_LF_UPLOAD_SIM_SAMPLES, (uint8_t *)&payload_up, sizeof(struct pupload));
@@ -1518,9 +1527,9 @@ int CmdLFfind(const char *Cmd) {
 
             PrintAndLogEx(NORMAL, "");
             PrintAndLogEx(FAILED, _RED_("No data found!"));
-            PrintAndLogEx(INFO, "Signal looks like noise. Maybe not an LF tag?");
+            PrintAndLogEx(HINT, "Maybe not an LF tag?");
             PrintAndLogEx(NORMAL, "");
-            if (! search_cont) {
+            if (search_cont == 0) {
                 return PM3_ESOFT;
             }
         }

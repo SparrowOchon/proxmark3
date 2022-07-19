@@ -20,9 +20,6 @@
 // Created for the live streamed talk 'DEFCON 28 Wireless Village-Omikron and Iceman - Ghosting the PACS-man: New Tools and Techniques'
 // https://www.youtube.com/watch?v=ghiHXK4GEzE
 //
-//  I created a youtube video demonstrating the HF_ICECLASS standalone mode
-//  https://youtu.be/w_1GnAscNIU
-//
 //
 
 #include "standalone.h" // standalone definitions
@@ -252,7 +249,7 @@ static int reader_attack_mode(void) {
 
         bool success = (mac_response_len == MAC_RESPONSES_SIZE);
         uint8_t num_mac = (mac_response_len >> 4);
-        Dbprintf("%u out of %d MAC obtained [%s]", num_mac, NUM_CSNS, (success) ? _GREEN_("ok") : _RED_("fail"));
+        Dbprintf("%u out of %d MAC obtained ( %s )", num_mac, NUM_CSNS, (success) ? _GREEN_("ok") : _RED_("fail"));
 
         size_t dumplen = NUM_CSNS * 24;
 
@@ -636,7 +633,7 @@ void RunMod(void) {
         mode = bb[0];
     }
 
-    FpgaDownloadAndGo(FPGA_BITSTREAM_HF);
+    FpgaDownloadAndGo(FPGA_BITSTREAM_HF_15);
     BigBuf_Clear_ext(false);
 
     StandAloneMode();

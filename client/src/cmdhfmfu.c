@@ -25,7 +25,6 @@
 #include "cmdhfmf.h"
 #include "cmdhf14a.h"
 #include "comms.h"
-#include "fileutils.h"
 #include "protocols.h"
 #include "generator.h"
 #include "nfc/ndef.h"
@@ -104,34 +103,61 @@ static uint8_t UL_MEMORY_ARRAY[ARRAYLEN(UL_TYPES_ARRAY)] = {
 
 //------------------------------------
 // get version nxp product type
-static char *getProductTypeStr(uint8_t id) {
-
+static const char *getProductTypeStr(uint8_t id) {
     static char buf[20];
-    char *retStr = buf;
 
     switch (id) {
         case 3:
-            sprintf(retStr, "%02X, Ultralight", id);
-            break;
+            return "Ultralight";
         case 4:
-            sprintf(retStr, "%02X, NTAG", id);
-            break;
+            return "NTAG";
         default:
-            sprintf(retStr, "%02X, unknown", id);
-            break;
+            snprintf(buf, sizeof(buf), "%02X, unknown", id);
+            return buf;
     }
-    return buf;
 }
+
+static int ul_print_nxp_silicon_info(uint8_t *card_uid) {
+
+    if (card_uid[0] != 0x04) {
+        return PM3_SUCCESS;
+    }
+
+    uint8_t uid[7];
+    memcpy(&uid, card_uid, 7);
+
+    uint16_t waferCoordX = ((uid[6] & 3) << 8) | uid[1];
+    uint16_t waferCoordY = ((uid[6] & 12) << 6) | uid[2];
+    uint32_t waferCounter = (
+                                (uid[4] << 5) |
+                                ((uid[6] & 0xF0) << 17) |
+                                (uid[5] << 13) |
+                                (uid[3] >> 3)
+                            );
+    uint8_t testSite = uid[3] & 7;
+
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(INFO, "--- " _CYAN_("Tag Silicon Information"));
+    PrintAndLogEx(INFO, "       Wafer Counter: %" PRId32 " ( 0x%02" PRIX32 " )", waferCounter, waferCounter);
+    PrintAndLogEx(INFO, "   Wafer Coordinates: x %" PRId16 ", y %" PRId16 " (0x%02" PRIX16 ", 0x%02" PRIX16 ")"
+                  , waferCoordX
+                  , waferCoordY
+                  , waferCoordX
+                  , waferCoordY
+                 );
+    PrintAndLogEx(INFO, "           Test Site: %u", testSite);
+    return PM3_SUCCESS;
+}
+
 
 /*
   The 7 MSBits (=n) code the storage size itself based on 2^n,
   the LSBit is set to '0' if the size is exactly 2^n
   and set to '1' if the storage size is between 2^n and 2^(n+1).
 */
-static char *getUlev1CardSizeStr(uint8_t fsize) {
+static const char *getUlev1CardSizeStr(uint8_t fsize) {
 
     static char buf[40];
-    char *retStr = buf;
     memset(buf, 0, sizeof(buf));
 
     uint16_t usize = 1 << ((fsize >> 1) + 1);
@@ -139,9 +165,9 @@ static char *getUlev1CardSizeStr(uint8_t fsize) {
 
     // is  LSB set?
     if (fsize & 1)
-        sprintf(retStr, "%02X, (%u <-> %u bytes)", fsize, usize, lsize);
+        snprintf(buf, sizeof(buf), "%02X, (%u <-> %u bytes)", fsize, usize, lsize);
     else
-        sprintf(retStr, "%02X, (%u bytes)", fsize, lsize);
+        snprintf(buf, sizeof(buf), "%02X, (%u bytes)", fsize, lsize);
     return buf;
 }
 
@@ -411,7 +437,7 @@ static int ul_fudan_check(void) {
     if (!ul_select(&card))
         return UL_ERROR;
 
-    uint8_t cmd[4] = {0x30, 0x00, 0x02, 0xa7}; //wrong crc on purpose  should be 0xa8
+    uint8_t cmd[4] = {ISO14443A_CMD_READBLOCK, 0x00, 0x02, 0xa7}; //wrong crc on purpose  should be 0xa8
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_RAW | ISO14A_NO_DISCONNECT | ISO14A_NO_RATS, 4, 0, cmd, sizeof(cmd));
     PacketResponseNG resp;
@@ -456,16 +482,16 @@ static int ul_print_default(uint8_t *data, uint8_t *real_uid) {
         // CT (cascade tag byte) 0x88 xor SN0 xor SN1 xor SN2
         int crc0 = 0x88 ^ uid[0] ^ uid[1] ^ uid[2];
         if (data[3] == crc0)
-            PrintAndLogEx(SUCCESS, "      BCC0: %02X (" _GREEN_("ok") ")", data[3]);
+            PrintAndLogEx(SUCCESS, "      BCC0: %02X ( " _GREEN_("ok") " )", data[3]);
         else
             PrintAndLogEx(NORMAL, "      BCC0: %02X, crc should be %02X", data[3], crc0);
 
         int crc1 = uid[3] ^ uid[4] ^ uid[5] ^ uid[6];
         if (data[8] == crc1)
-            PrintAndLogEx(SUCCESS, "      BCC1: %02X (" _GREEN_("ok") ")", data[8]);
+            PrintAndLogEx(SUCCESS, "      BCC1: %02X ( " _GREEN_("ok") " )", data[8]);
         else
             PrintAndLogEx(NORMAL, "      BCC1: %02X, crc should be %02X", data[8], crc1);
-        PrintAndLogEx(SUCCESS, "  Internal: %02X (%s)", data[9], (data[9] == 0x48) ? _GREEN_("default") : _RED_("not default"));
+        PrintAndLogEx(SUCCESS, "  Internal: %02X ( %s )", data[9], (data[9] == 0x48) ? _GREEN_("default") : _RED_("not default"));
     } else {
         PrintAndLogEx(SUCCESS, "Blocks 0-2: %s", sprint_hex(data + 0, 12));
     }
@@ -519,34 +545,38 @@ static int ndef_print_CC(uint8_t *data) {
     uint8_t cc_minor = (data[1] & 0x30) >> 4;
     uint8_t cc_major = (data[1] & 0xC0) >> 6;
 
-    char wStr[50];
-    memset(wStr, 0, sizeof(wStr));
+    const char *wStr;
     switch (cc_write) {
         case 0:
-            sprintf(wStr, "Write access granted without any security");
+            wStr = "Write access granted without any security";
             break;
         case 1:
-            sprintf(wStr, "RFU");
+            wStr = "RFU";
             break;
         case 2:
-            sprintf(wStr, "Proprietary");
+            wStr = "Proprietary";
             break;
         case 3:
-            sprintf(wStr, "No write access");
+            wStr = "No write access";
+            break;
+        default:
+            wStr = "Unknown";
             break;
     }
-    char rStr[46];
-    memset(rStr, 0, sizeof(rStr));
+    const char *rStr;
     switch (cc_read) {
         case 0:
-            sprintf(rStr, "Read access granted without any security");
+            rStr = "Read access granted without any security";
             break;
         case 1:
         case 3:
-            sprintf(rStr, "RFU");
+            rStr = "RFU";
             break;
         case 2:
-            sprintf(rStr, "Proprietary");
+            rStr = "Proprietary";
+            break;
+        default:
+            rStr = "Unknown";
             break;
     }
 
@@ -579,10 +609,10 @@ static int ndef_print_CC(uint8_t *data) {
     PrintAndLogEx(SUCCESS, "  Additional feature information");
     PrintAndLogEx(SUCCESS, "  %02X", data[3]);
     PrintAndLogEx(SUCCESS, "  00000000");
-    PrintAndLogEx(SUCCESS, "  xxx      - %02X: RFU (%s)", msb3, (msb3 == 0) ? _GREEN_("ok") : _RED_("fail"));
+    PrintAndLogEx(SUCCESS, "  xxx      - %02X: RFU ( %s )", msb3, (msb3 == 0) ? _GREEN_("ok") : _RED_("fail"));
     PrintAndLogEx(SUCCESS, "     x     - %02X: %s special frame", sf, (sf) ? "support" : "don\'t support");
     PrintAndLogEx(SUCCESS, "      x    - %02X: %s lock block", lb, (lb) ? "support" : "don\'t support");
-    PrintAndLogEx(SUCCESS, "       xx  - %02X: RFU (%s)", mlrule, (mlrule == 0) ? _GREEN_("ok") : _RED_("fail"));
+    PrintAndLogEx(SUCCESS, "       xx  - %02X: RFU ( %s )", mlrule, (mlrule == 0) ? _GREEN_("ok") : _RED_("fail"));
     PrintAndLogEx(SUCCESS, "         x - %02X: IC %s multiple block reads", mbread, (mbread) ? "support" : "don\'t support");
     return PM3_SUCCESS;
 }
@@ -1297,7 +1327,7 @@ static int mfu_fingerprint(TagTypeUL_t tagtype, bool hasAuthKey, uint8_t *authke
 
             if (item->Pwd) {
                 char s[40] = {0};
-                sprintf(s, item->hint, item->Pwd(uid));
+                snprintf(s, sizeof(s), item->hint, item->Pwd(uid));
                 PrintAndLogEx(HINT, "Use `" _YELLOW_("%s") "`", s);
             } else {
                 PrintAndLogEx(HINT, "Use `" _YELLOW_("%s") "`", item->hint);
@@ -1492,8 +1522,8 @@ static int CmdHF14AMfUInfo(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("k", "key", "<hex>", "key for authentication (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
-        arg_lit0("l", NULL, "swap entered key's endianness"),
+        arg_str0("k", "key", "<hex>", "Authentication key (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
+        arg_lit0("l", NULL, "Swap entered key's endianness"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -1644,6 +1674,9 @@ static int CmdHF14AMfUInfo(const char *Cmd) {
             }
         }
 
+        // print silicon info
+        ul_print_nxp_silicon_info(card.uid);
+
         // Get Version
         uint8_t version[10] = {0x00};
         status  = ulev1_getVersion(version, sizeof(version));
@@ -1792,11 +1825,11 @@ static int CmdHF14AMfUWrBl(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("k", "key", "<hex>", "key for authentication (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
-        arg_lit0("l", NULL, "swap entered key's endianness"),
-        arg_int1("b", "block", "<dec>", "block number to write"),
-        arg_str1("d", "data", "<hex>", "block data (4 or 16 hex bytes, 16 hex bytes will do a compatibility write)"),
-        arg_lit0(NULL, "force", "force operation even if address is out of range"),
+        arg_str0("k", "key", "<hex>", "Authentication key (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
+        arg_lit0("l", NULL, "Swap entered key's endianness"),
+        arg_int1("b", "block", "<dec>", "Block number to write"),
+        arg_str1("d", "data", "<hex>", "Block data (4 or 16 hex bytes, 16 hex bytes will do a compatibility write)"),
+        arg_lit0(NULL, "force", "Force operation even if address is out of range"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -1924,10 +1957,10 @@ static int CmdHF14AMfURdBl(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("k", "key", "<hex>", "key for authentication (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
-        arg_lit0("l", NULL, "swap entered key's endianness"),
-        arg_int1("b", "block", "<dec>", "block number to read"),
-        arg_lit0(NULL, "force", "force operation even if address is out of range"),
+        arg_str0("k", "key", "<hex>", "Authentication key (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
+        arg_lit0("l", NULL, "Swap entered key's endianness"),
+        arg_int1("b", "block", "<dec>", "Nlock number to read"),
+        arg_lit0(NULL, "force", "Force operation even if address is out of range"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -2021,19 +2054,22 @@ static int CmdHF14AMfURdBl(const char *Cmd) {
 
 void printMFUdumpEx(mfu_dump_t *card, uint16_t pages, uint8_t startpage) {
 
+    PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, _CYAN_("MFU dump file information"));
     PrintAndLogEx(INFO, "-------------------------------------------------------------");
-    PrintAndLogEx(INFO, "      Version | " _YELLOW_("%s"), sprint_hex(card->version, sizeof(card->version)));
-    PrintAndLogEx(INFO, "        TBD 0 | %s", sprint_hex(card->tbo, sizeof(card->tbo)));
-    PrintAndLogEx(INFO, "        TBD 1 | %s", sprint_hex(card->tbo1, sizeof(card->tbo1)));
-    PrintAndLogEx(INFO, "    Signature | %s", sprint_hex(card->signature, sizeof(card->signature)));
+    PrintAndLogEx(INFO, "Version..... " _YELLOW_("%s"), sprint_hex(card->version, sizeof(card->version)));
+    PrintAndLogEx(INFO, "TBD 0....... %s", sprint_hex(card->tbo, sizeof(card->tbo)));
+    PrintAndLogEx(INFO, "TBD 1....... %s", sprint_hex(card->tbo1, sizeof(card->tbo1)));
+    PrintAndLogEx(INFO, "Signature... %s", sprint_hex(card->signature, 16));
+    PrintAndLogEx(INFO, "             %s", sprint_hex(card->signature + 16, sizeof(card->signature) - 16));
     for (uint8_t i = 0; i < 3; i ++) {
-        PrintAndLogEx(INFO, "    Counter %d | %s", i, sprint_hex(card->counter_tearing[i], 3));
-        PrintAndLogEx(INFO, "    Tearing %d | %s", i, sprint_hex(card->counter_tearing[i] + 3, 1));
+        PrintAndLogEx(INFO, "Counter %d... %s", i, sprint_hex(card->counter_tearing[i], 3));
+        PrintAndLogEx(INFO, "Tearing %d... %s", i, sprint_hex(card->counter_tearing[i] + 3, 1));
     }
 
-    PrintAndLogEx(INFO, "Max data page | " _YELLOW_("%d") " (" _YELLOW_("%d") " bytes)", card->pages - 1, card->pages * 4);
-    PrintAndLogEx(INFO, "  Header size | %d", MFU_DUMP_PREFIX_LENGTH);
+    PrintAndLogEx(INFO, "Max data page... " _YELLOW_("%d") " ( " _YELLOW_("%d") " bytes )", card->pages - 1, card->pages * 4);
+    PrintAndLogEx(INFO, "Header size..... %d bytes", MFU_DUMP_PREFIX_LENGTH);
+    PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "-------------------------------------------------------------");
     PrintAndLogEx(INFO, "block#   | data        |lck| ascii");
     PrintAndLogEx(INFO, "---------+-------------+---+------");
@@ -2065,7 +2101,7 @@ void printMFUdumpEx(mfu_dump_t *card, uint16_t pages, uint8_t startpage) {
         PrintAndLogEx(INFO, "DYNAMIC LOCK: %s", sprint_hex(lockbytes_dyn, 3));
     }
 
-    for (uint8_t i = 0; i < pages; ++i) {
+    for (uint16_t i = 0; i < pages; ++i) {
         if (i < 3) {
             PrintAndLogEx(INFO, "%3d/0x%02X | %s|   | %s", i + startpage, i + startpage, sprint_hex(data + i * 4, 4), sprint_ascii(data + i * 4, 4));
             continue;
@@ -2173,11 +2209,12 @@ static int CmdHF14AMfUDump(const char *Cmd) {
 
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfu dump",
-                  "Reads all pages from Ultralight, Ultralight-C, Ultralight EV1\n"
-                  "NTAG 203, NTAG 210, NTAG 212, NTAG 213, NTAG 215, NTAG 216\n"
-                  "and saves data into binary/json files.\n"
-                  "It autodetects card type.",
-                  "hf mfu dump -f myfile        -> dump whole tag, save to `myfile.bin`\n"
+                  "Dump MIFARE Ultralight/NTAG tag to binary/eml/json files.\n"
+                  "It autodetects card type."
+                  "Supports:\n"
+                  "Ultralight, Ultralight-C, Ultralight EV1\n"
+                  "NTAG 203, NTAG 210, NTAG 212, NTAG 213, NTAG 215, NTAG 216\n",
+                  "hf mfu dump -f myfile\n"
                   "hf mfu dump -k AABBCCDD      -> dump whole tag using pwd AABBCCDD\n"
                   "hf mfu dump -p 10            -> start at page 10 and dump rest of blocks\n"
                   "hf mfu dump -p 10 -q 2       -> start at page 10 and dump two blocks\n"
@@ -2186,11 +2223,11 @@ static int CmdHF14AMfUDump(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("f", "file", "<fn>", "specify a filename for dump file"),
-        arg_str0("k", "key", "<hex>", "key for authentication (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
-        arg_lit0("l", NULL, "swap entered key's endianness"),
-        arg_int0("p", "page", "<dec>", "manually set start page number to start from"),
-        arg_int0("q", "qty", "<dec>", "manually set number of pages to dump"),
+        arg_str0("f", "file", "<fn>", "Specify a filename for dump file"),
+        arg_str0("k", "key", "<hex>", "Key for authentication (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
+        arg_lit0("l", NULL, "Swap entered key's endianness"),
+        arg_int0("p", "page", "<dec>", "Manually set start page number to start from"),
+        arg_int0("q", "qty", "<dec>", "Manually set number of pages to dump"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -2411,9 +2448,8 @@ static int CmdHF14AMfUDump(const char *Cmd) {
         strcat(filename, "hf-mfu-");
         FillFileNameByUID(filename, uid, "-dump", sizeof(uid));
     }
-    uint16_t datalen = pages * 4 + MFU_DUMP_PREFIX_LENGTH;
-    saveFile(filename, ".bin", (uint8_t *)&dump_file_data, datalen);
-    saveFileJSON(filename, jsfMfuMemory, (uint8_t *)&dump_file_data, datalen, NULL);
+    uint16_t datalen = pages * MFU_BLOCK_SIZE + MFU_DUMP_PREFIX_LENGTH;
+    pm3_save_dump(filename, (uint8_t *)&dump_file_data, datalen, jsfMfuMemory, MFU_BLOCK_SIZE);
 
     if (is_partial)
         PrintAndLogEx(WARNING, "Partial dump created. (%d of %d blocks)", pages, card_mem_size);
@@ -2438,20 +2474,20 @@ static void wait4response(uint8_t b) {
 static int CmdHF14AMfURestore(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfu restore",
-                  "Restore dumpfile onto card.",
-                  "hf mfu restore -f myfile -s                 -> user specified filename and special write\n"
-                  "hf mfu restore -f myfile -k AABBCCDD -s     -> user specified filename, special write and use key\n"
-                  "hf mfu restore -f myfile -k AABBCCDD -ser   -> user specified filename, special write, use key, ..."
+                  "Restore MIFARE Ultralight/NTAG dump file to tag.\n",
+                  "hf mfu restore -f myfile -s                 -> special write\n"
+                  "hf mfu restore -f myfile -k AABBCCDD -s     -> special write, use key\n"
+                  "hf mfu restore -f myfile -k AABBCCDD -ser   -> special write, use key, write dump pwd, ..."
                  );
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str1("f", "file", "<fn>", "specify a filename to restore"),
+        arg_str1("f", "file", "<fn>", "specify dump filename (bin/eml/json)"),
         arg_str0("k", "key", "<hex>", "key for authentication (UL-C 16 bytes, EV1/NTAG 4 bytes)"),
         arg_lit0("l", NULL, "swap entered key's endianness"),
         arg_lit0("s", NULL, "enable special write UID -MAGIC TAG ONLY-"),
         arg_lit0("e", NULL, "enable special write version/signature -MAGIC NTAG 21* ONLY-"),
-        arg_lit0("r", NULL, "use the password found in dumpfile to configure tag. requires " _YELLOW_("'-e'") " parameter to work"),
+        arg_lit0("r", NULL, "use password found in dumpfile to configure tag. Requires " _YELLOW_("'-e'") " parameter to work"),
         arg_lit0("v", "verbose", "verbose"),
         arg_param_end
     };
@@ -2484,9 +2520,6 @@ static int CmdHF14AMfURestore(const char *Cmd) {
         }
     }
 
-    uint8_t *dump = NULL;
-    size_t bytes_read = 0;
-
     if (fnlen == 0) {
         char *fptr = GenerateFilename("hf-mfu-", "-dump.bin");
         if (fptr != NULL) {
@@ -2497,9 +2530,12 @@ static int CmdHF14AMfURestore(const char *Cmd) {
         free(fptr);
     }
 
-    if (loadFile_safe(filename, "", (void **)&dump, &bytes_read) != PM3_SUCCESS) {
-        PrintAndLogEx(WARNING, "Could not find file " _YELLOW_("%s"), filename);
-        return PM3_EIO;
+    // read dump file
+    uint8_t *dump = NULL;
+    size_t bytes_read = 0;
+    int res = pm3_load_dump(filename, (void **)&dump, &bytes_read, (MFU_MAX_BYTES + MFU_DUMP_PREFIX_LENGTH));
+    if (res != PM3_SUCCESS) {
+        return res;
     }
 
     if (bytes_read < MFU_DUMP_PREFIX_LENGTH) {
@@ -2508,7 +2544,7 @@ static int CmdHF14AMfURestore(const char *Cmd) {
         return PM3_ESOFT;
     }
 
-    int res = convert_mfu_dump_format(&dump, &bytes_read, verbose);
+    res = convert_mfu_dump_format(&dump, &bytes_read, verbose);
     if (res != PM3_SUCCESS) {
         PrintAndLogEx(FAILED, "Failed convert on load to new Ultralight/NTAG format");
         free(dump);
@@ -2516,10 +2552,11 @@ static int CmdHF14AMfURestore(const char *Cmd) {
     }
 
     mfu_dump_t *mem = (mfu_dump_t *)dump;
-    uint8_t pages = (bytes_read - MFU_DUMP_PREFIX_LENGTH) / 4;
+    uint8_t pages = (bytes_read - MFU_DUMP_PREFIX_LENGTH) / MFU_BLOCK_SIZE;
 
     if (pages - 1 != mem->pages) {
         PrintAndLogEx(ERR, "Error, invalid dump, wrong page count");
+        PrintAndLogEx(INFO, " %u  vs mempg %u", pages - 1,  mem->pages);
         free(dump);
         return PM3_ESOFT;
     }
@@ -2655,22 +2692,31 @@ static int CmdHF14AMfUeLoad(const char *Cmd) {
 
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfu eload",
-                  "Load emulator memory with data from `filename.eml` dump file\n"
-                  "\nSee `script run data_mfu_bin2eml` to convert the .bin to .eml",
-                  "hf mfu eload --ul -f hf-mfu-04010203040506.eml\n"
-                  "hf mfu eload --ul -f hf-mfu-04010203040506.eml -q 57   -> load 57 blocks from myfile"
+                  "Load emulator memory with data from (bin/eml/json) dump file\n",
+                  "hf mfu eload -f hf-mfu-04010203040506.bin\n"
+                  "hf mfu eload -f hf-mfu-04010203040506.bin -q 57   -> load 57 blocks from myfile"
                  );
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str1("f", "file", "<fn>", "filename of dump"),
-        arg_lit1(NULL, "ul", "MIFARE Ultralight family"),
-        arg_int0("q", "qty", "<dec>", "number of blocks to load from eml file"),
+        arg_str1("f", "file", "<fn>", "Filename of dump"),
+        arg_int0("q", "qty", "<dec>", "Number of blocks to load from eml file"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
     CLIParserFree(ctx);
-    return CmdHF14AMfELoad(Cmd);
+
+    size_t nc_len = strlen(Cmd) + 6;
+    char *nc = calloc(nc_len, 1);
+    if (nc == NULL) {
+        return CmdHF14AMfELoad(Cmd);
+    }
+
+    snprintf(nc, nc_len, "%s --ul", Cmd);
+    int res = CmdHF14AMfELoad(nc);
+    free(nc);
+
+    return res;
 }
 //
 //  Simulate tag
@@ -2688,10 +2734,10 @@ static int CmdHF14AMfUSim(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_int1("t", "type", "<1-10> ", "Simulation type to use"),
-        arg_str0("u", "uid", "<hex>", "4, 7 or 10 byte UID"),
-        arg_int0("n", "num", "<dec>", "Exit simulation after <numreads> blocks have been read by reader. 0 = infinite"),
-        arg_lit0("v", "verbose", "verbose output"),
+        arg_int1("t", "type", "<1..10> ", "Simulation type to use"),
+        arg_str0("u", "uid", "<hex>", "<4|7|10> hex bytes UID"),
+        arg_int0("n", "num", "<dec>", "Exit simulation after <numreads> blocks. 0 = infinite"),
+        arg_lit0("v", "verbose", "Verbose output"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -2716,9 +2762,9 @@ static int CmdHF14AMfUCAuth(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0(NULL, "key", "<hex>", "key for authentication (UL-C 16 bytes)"),
-        arg_lit0("l", NULL, "swap entered key's endianness"),
-        arg_lit0("k", NULL, "keep field on (only if a password is provided too)"),
+        arg_str0(NULL, "key", "<hex>", "Authentication key (UL-C 16 hex bytes)"),
+        arg_lit0("l", NULL, "Swap entered key's endianness"),
+        arg_lit0("k", NULL, "Keep field on (only if a password is provided)"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -2868,7 +2914,7 @@ static int CmdHF14AMfUCSetPwd(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("k", "key", "<hex>", "New key (16 bytes)"),
+        arg_str0("k", "key", "<hex>", "New key (16 hex bytes)"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -2908,14 +2954,14 @@ static int CmdHF14AMfUCSetUid(const char *Cmd) {
 
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfu setuid",
-                  "Set uid on MIFARE Ultralight tag.\n"
+                  "Set UID on MIFARE Ultralight tag.\n"
                   "This only works for `magic Ultralight` tags.",
                   "hf mfu setuid --uid 11223344556677"
                  );
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("u", "uid", "<hex>", "new uid (7 bytes)"),
+        arg_str0("u", "uid", "<hex>", "New UID (7 hex bytes)"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -3016,7 +3062,7 @@ static int CmdHF14AMfUGenDiverseKeys(const char *Cmd) {
     void *argtable[] = {
         arg_param_begin,
         arg_str0("u", "uid", "<hex>", "<4|7> hex byte UID"),
-        arg_lit0("r", NULL, "read UID from tag"),
+        arg_lit0("r", NULL, "Read UID from tag"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -3162,9 +3208,9 @@ static int CmdHF14AMfUPwdGen(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("u", "uid", "<hex>", "uid (7 bytes)"),
-        arg_lit0("r", NULL, "read uid from tag"),
-        arg_lit0("t", NULL, "selftest"),
+        arg_str0("u", "uid", "<hex>", "UID (7 hex bytes)"),
+        arg_lit0("r", NULL, "Read UID from tag"),
+        arg_lit0("t", NULL, "Selftest"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -3194,7 +3240,7 @@ static int CmdHF14AMfUPwdGen(const char *Cmd) {
     }
 
     PrintAndLogEx(INFO, "------------------.---------------");
-    PrintAndLogEx(INFO, " Using UID : %s", sprint_hex(uid, 7));
+    PrintAndLogEx(INFO, " Using UID : " _YELLOW_("%s"), sprint_hex(uid, 7));
     PrintAndLogEx(INFO, "----------------------------------");
     PrintAndLogEx(INFO, " algo            | pwd      | pack");
     PrintAndLogEx(INFO, "-----------------+----------+-----");
@@ -3203,6 +3249,7 @@ static int CmdHF14AMfUPwdGen(const char *Cmd) {
     PrintAndLogEx(INFO, " Lego Dimension  | %08X | %04X", ul_ev1_pwdgenC(uid), ul_ev1_packgenC(uid));
     PrintAndLogEx(INFO, " XYZ 3D printer  | %08X | %04X", ul_ev1_pwdgenD(uid), ul_ev1_packgenD(uid));
     PrintAndLogEx(INFO, " Xiaomi purifier | %08X | %04X", ul_ev1_pwdgenE(uid), ul_ev1_packgenE(uid));
+    PrintAndLogEx(INFO, " NTAG tools      | %08X | %04X", ul_ev1_pwdgenF(uid), ul_ev1_packgen_def(uid));
     PrintAndLogEx(INFO, "-----------------+----------+-----");
     PrintAndLogEx(INFO, " Vingcard algo");
     PrintAndLogEx(INFO, "----------------------------------");
@@ -3736,7 +3783,7 @@ static int CmdHF14AMfuEv1CounterTearoff(const char *Cmd) {
                     , poststr
                     , pre_tear
                     , post_tear
-                    , post_tear_check ? _GREEN_("OK") : _RED_("DETECTED")
+                    , post_tear_check ? _GREEN_("ok") : _RED_("DETECTED")
                 );
                 break;
             }
@@ -3747,7 +3794,7 @@ static int CmdHF14AMfuEv1CounterTearoff(const char *Cmd) {
                     , poststr
                     , pre_tear
                     , post_tear
-                    , post_tear_check ? _GREEN_("OK") : _RED_("DETECTED")
+                    , post_tear_check ? _GREEN_("ok") : _RED_("DETECTED")
                 );
 
 
@@ -3781,7 +3828,7 @@ static int CmdHF14AMfuEv1CounterTearoff(const char *Cmd) {
                     , poststr
                     , pre_tear
                     , post_tear
-                    , post_tear_check ? _GREEN_("OK") : _RED_("DETECTED")
+                    , post_tear_check ? _GREEN_("ok") : _RED_("DETECTED")
                 );
 
                 if ( post_tear_check  && b == initial_value) {
@@ -3829,7 +3876,7 @@ static int CmdHF14AMfuEv1CounterTearoff(const char *Cmd) {
                 , poststr
                 , pre_tear
                 , post_tear
-                , post_tear_check ? _GREEN_("OK") : _RED_("DETECTED")
+                , post_tear_check ? _GREEN_("ok") : _RED_("DETECTED")
             );
 
             if ( post_tear_check ) {
@@ -3865,10 +3912,10 @@ static int CmdHF14AMfuEv1CounterTearoff(const char *Cmd) {
     PrintAndLogEx(INFO, "hf 14a raw -s -c 3e00              -->  read tearing 0");
     PrintAndLogEx(NORMAL, "");
     char read_cnt_str[30];
-    sprintf(read_cnt_str, "hf 14a raw -s -c 39%02x", counter);
+    snprintf(read_cnt_str, sizeof(read_cnt_str), "hf 14a raw -s -c 39%02x", counter);
     CommandReceived(read_cnt_str);
     char read_tear_str[30];
-    sprintf(read_tear_str, "hf 14a raw -s -c 3e%02x", counter);
+    snprintf(read_tear_str, sizeof(read_tear_str), "hf 14a raw -s -c 3e%02x", counter);
     CommandReceived(read_tear_str);
     return PM3_SUCCESS;
 }
@@ -3905,9 +3952,9 @@ int CmdHF14MfuNDEFRead(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("k", "key", "replace default key for NDEF", NULL),
-        arg_lit0("l", NULL, "swap entered key's endianness"),
-        arg_str0("f", "file", "<fn>", "save raw NDEF to file"),
+        arg_str0("k", "key", "Replace default key for NDEF", NULL),
+        arg_lit0("l", NULL, "Swap entered key's endianness"),
+        arg_str0("f", "file", "<fn>", "Save raw NDEF to file"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -3933,7 +3980,7 @@ int CmdHF14MfuNDEFRead(const char *Cmd) {
     // Get tag type
     TagTypeUL_t tagtype = GetHF14AMfU_Type();
     if (tagtype == UL_ERROR) {
-        PrintAndLogEx(WARNING, "No Ultraligth / NTAG based tag found");
+        PrintAndLogEx(WARNING, "No Ultralight / NTAG based tag found");
         return PM3_ESOFT;
     }
 
@@ -3985,7 +4032,7 @@ int CmdHF14MfuNDEFRead(const char *Cmd) {
     }
 
     // read NDEF records.
-    for (uint16_t i = 0, j = 0; i < maxsize; i += 16, j += 4) {
+    for (uint32_t i = 0, j = 0; i < maxsize; i += 16, j += 4) {
         status = ul_read(4 + j, records + i, 16);
         if (status == -1) {
             DropField();
@@ -4057,8 +4104,8 @@ static int CmdHF14AMfuEView(const char *Cmd) {
     CLIExecWithReturn(ctx, Cmd, argtable, true);
     CLIParserFree(ctx);
 
-    uint16_t blocks = 0xFF;
-    uint16_t bytes = blocks * 4;
+    uint16_t blocks = MFU_MAX_BLOCKS;
+    uint16_t bytes = MFU_MAX_BYTES + MFU_DUMP_PREFIX_LENGTH;
 
     uint8_t *dump = calloc(bytes, sizeof(uint8_t));
     if (dump == NULL) {
@@ -4073,18 +4120,64 @@ static int CmdHF14AMfuEView(const char *Cmd) {
         return PM3_ETIMEOUT;
     }
 
-    PrintAndLogEx(NORMAL, "");
-    PrintAndLogEx(INFO, "----+-------------+-------");
-    PrintAndLogEx(INFO, "blk | data        | ascii");
-    PrintAndLogEx(INFO, "----+-------------+-------");
-    for (uint16_t i = 0; i < blocks; i++) {
-        PrintAndLogEx(INFO, "%03d | %s ", i, sprint_hex_ascii(dump + (i * 4), 4));
-    }
-    PrintAndLogEx(INFO, "----+-------------+-------");
-    PrintAndLogEx(NORMAL, "");
+    printMFUdumpEx((mfu_dump_t *)dump, blocks, 0);
     free(dump);
     return PM3_SUCCESS;
 }
+
+static int CmdHF14AMfuView(const char *Cmd) {
+
+    CLIParserContext *ctx;
+    CLIParserInit(&ctx, "hf mfu view",
+                  "Print a MIFARE Ultralight/NTAG dump file (bin/eml/json)",
+                  "hf mfu view -f hf-mfu-01020304-dump.bin"
+                 );
+    void *argtable[] = {
+        arg_param_begin,
+        arg_str1("f", "file", "<fn>", "Filename of dump"),
+        arg_lit0("v", "verbose", "Verbose output"),
+        arg_param_end
+    };
+    CLIExecWithReturn(ctx, Cmd, argtable, false);
+    int fnlen = 0;
+    char filename[FILE_PATH_SIZE];
+    CLIParamStrToBuf(arg_get_str(ctx, 1), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
+    bool verbose = arg_get_lit(ctx, 2);
+    CLIParserFree(ctx);
+
+    // read dump file
+    uint8_t *dump = NULL;
+    size_t bytes_read = 0;
+    int res = pm3_load_dump(filename, (void **)&dump, &bytes_read, (MFU_MAX_BYTES + MFU_DUMP_PREFIX_LENGTH));
+    if (res != PM3_SUCCESS) {
+        return res;
+    }
+
+    if (bytes_read < MFU_DUMP_PREFIX_LENGTH) {
+        PrintAndLogEx(ERR, "Error, dump file is too small");
+        free(dump);
+        return PM3_ESOFT;
+    }
+
+    res = convert_mfu_dump_format(&dump, &bytes_read, verbose);
+    if (res != PM3_SUCCESS) {
+        PrintAndLogEx(FAILED, "Failed convert on load to new Ultralight/NTAG format");
+        free(dump);
+        return res;
+    }
+
+    uint16_t block_cnt = ((bytes_read - MFU_DUMP_PREFIX_LENGTH) / MFU_BLOCK_SIZE);
+
+    if (verbose) {
+        PrintAndLogEx(INFO, "File: " _YELLOW_("%s"), filename);
+        PrintAndLogEx(INFO, "File size %zu bytes, file blocks %d (0x%x)", bytes_read, block_cnt, block_cnt);
+    }
+
+    printMFUdumpEx((mfu_dump_t *)dump, block_cnt, 0);
+    free(dump);
+    return PM3_SUCCESS;
+}
+
 
 /*
 static int CmdHF14AMfUCDecryptAmiibo(const char *Cmd){
@@ -4131,24 +4224,25 @@ static int CmdHF14AMfUCDecryptAmiibo(const char *Cmd){
 //------------------------------------
 static command_t CommandTable[] = {
     {"help",     CmdHelp,                   AlwaysAvailable, "This help"},
-    {"-----------", CmdHelp,               IfPm3Iso14443a,  "----------------------- " _CYAN_("recovery") " -------------------------"},
+    {"-----------", CmdHelp,                IfPm3Iso14443a,  "----------------------- " _CYAN_("recovery") " -------------------------"},
     {"keygen",   CmdHF14AMfUGenDiverseKeys, AlwaysAvailable, "Generate 3DES MIFARE diversified keys"},
     {"pwdgen",   CmdHF14AMfUPwdGen,         AlwaysAvailable, "Generate pwd from known algos"},
     {"otptear",  CmdHF14AMfuOtpTearoff,     IfPm3Iso14443a,  "Tear-off test on OTP bits"},
 //    {"tear_cnt", CmdHF14AMfuEv1CounterTearoff,     IfPm3Iso14443a,  "Tear-off test on Ev1/NTAG Counter bits"},
-    {"-----------", CmdHelp,               IfPm3Iso14443a,  "----------------------- " _CYAN_("operations") " -----------------------"},
+    {"-----------", CmdHelp,                IfPm3Iso14443a,  "----------------------- " _CYAN_("operations") " -----------------------"},
     {"cauth",    CmdHF14AMfUCAuth,          IfPm3Iso14443a,  "Authentication - Ultralight-C"},
     {"dump",     CmdHF14AMfUDump,           IfPm3Iso14443a,  "Dump MIFARE Ultralight family tag to binary file"},
     {"info",     CmdHF14AMfUInfo,           IfPm3Iso14443a,  "Tag information"},
     {"ndefread", CmdHF14MfuNDEFRead,        IfPm3Iso14443a,  "Prints NDEF records from card"},
     {"rdbl",     CmdHF14AMfURdBl,           IfPm3Iso14443a,  "Read block"},
     {"restore",  CmdHF14AMfURestore,        IfPm3Iso14443a,  "Restore a dump onto a MFU MAGIC tag"},
+    {"view",     CmdHF14AMfuView,           AlwaysAvailable, "Display content from tag dump file"},
     {"wrbl",     CmdHF14AMfUWrBl,           IfPm3Iso14443a,  "Write block"},
-    {"---------", CmdHelp,                 IfPm3Iso14443a,  "----------------------- " _CYAN_("simulation") " -----------------------"},
-    {"eload",    CmdHF14AMfUeLoad,          IfPm3Iso14443a,  "load Ultralight .eml dump file into emulator memory"},
+    {"---------", CmdHelp,                  IfPm3Iso14443a,  "----------------------- " _CYAN_("simulation") " -----------------------"},
+    {"eload",    CmdHF14AMfUeLoad,          IfPm3Iso14443a,  "Load Ultralight .eml dump file into emulator memory"},
     {"eview",    CmdHF14AMfuEView,          IfPm3Iso14443a,  "View emulator memory"},
     {"sim",      CmdHF14AMfUSim,            IfPm3Iso14443a,  "Simulate MIFARE Ultralight from emulator memory"},
-    {"---------", CmdHelp,                 IfPm3Iso14443a,  "----------------------- " _CYAN_("magic") " ----------------------------"},
+    {"---------", CmdHelp,                  IfPm3Iso14443a,  "----------------------- " _CYAN_("magic") " ----------------------------"},
     {"setpwd",   CmdHF14AMfUCSetPwd,        IfPm3Iso14443a,  "Set 3DES key - Ultralight-C"},
     {"setuid",   CmdHF14AMfUCSetUid,        IfPm3Iso14443a,  "Set UID - MAGIC tags only"},
 //    {"---------", CmdHelp,                 IfPm3Iso14443a,  "----------------------- " _CYAN_("amiibo") " ----------------------------"},
